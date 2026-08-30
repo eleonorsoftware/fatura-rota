@@ -1867,9 +1867,21 @@ function kusUcusu(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-/** Anahtar biçimsel olarak makul mü? (yanlış yapıştırmayı erken yakalar) */
+/**
+ * Anahtar biçimsel olarak makul mü? (yarım yapıştırmayı erken yakalar)
+ *
+ * ORS anahtar biçimini değiştirdi: eskiden `5b3ce359785111...` gibi düz
+ * onaltılık bir dizgeydi, şimdi base64 kodlanmış bir JWT geliyor —
+ * `eyJv…In0=` biçiminde, ~120 karakter ve SONUNDA `=` dolgusu olabiliyor.
+ * İlk yazılan desen `=` kabul etmediği için gerçek anahtarı reddediyordu.
+ * Bu yüzden base64'ün tüm karakterleri (`+/=`) ve JWT noktası kabul ediliyor.
+ *
+ * Amaç anahtarı DOĞRULAMAK değil — onu ancak sunucu yapabilir. Amaç, yarım
+ * kopyalanmış ya da yanlış yere yapıştırılmış bir metni kaydetmeden önce
+ * yakalamak.
+ */
 function anahtarGecerliMi(a) {
-  return typeof a === 'string' && /^[A-Za-z0-9._-]{30,}$/.test(a.trim());
+  return typeof a === 'string' && /^[A-Za-z0-9._\-+/=]{30,}$/.test(a.trim());
 }
 
 module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openrouteservice by HeiGIT | Data from OpenStreetMap' };
@@ -1883,6 +1895,6 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
     fatura: require('./fatura'),
     rota: require('./rota'),
     ors: require('./ors'),
-    surum: '20260830184649',
+    surum: '20260830185650',
   };
 })(typeof self !== 'undefined' ? self : this);
