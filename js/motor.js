@@ -1895,6 +1895,6 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
     fatura: require('./fatura'),
     rota: require('./rota'),
     ors: require('./ors'),
-    surum: '20260830185945',
+    surum: '20260830190942',
   };
 })(typeof self !== 'undefined' ? self : this);

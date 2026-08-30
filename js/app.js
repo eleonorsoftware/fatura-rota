@@ -613,6 +613,13 @@
     for (const dosya of dosyalar) {
       sira++;
       const onek = dosyalar.length > 1 ? '(' + sira + '/' + dosyalar.length + ') ' : '';
+      /* Tanı bilgisi — bir şey ters giderse ekranda görünsün. Telefonda
+         hata ayıklama konsolu açmak mümkün değil; kullanıcının okuyup
+         söyleyebileceği somut bilgi gerekiyor. */
+      const okumaBilgisi = {
+        dosya: (dosya.name || 'kare') + ' · ' + Math.round((dosya.size||0)/1024) + ' KB' +
+               (dosya.type ? ' · ' + dosya.type : ''),
+      };
       try {
         bilgiGoster(onek + 'Fotoğraf okunuyor…', true);
         const okuma = await window.Ocr.oku(dosya, (durumAdi, oran) => {
@@ -620,9 +627,13 @@
           else if (/loading|initializing/i.test(durumAdi)) bilgiGoster('Okuma motoru ilk kez hazırlanıyor…', true);
         });
 
-        /* Boş sayfa / bulanık kare: motora sokmadan önce ele. */
+        /* Boş sayfa / bulanık kare: motora sokmadan önce ele.
+           Bu da kalıcı kartla bildiriliyor — sürücü bir şeyin olmadığını
+           değil, NEDEN olmadığını görmeli. */
         if (!okuma.metin || okuma.metin.replace(/\s/g, '').length < 12) {
-          uyar('Bu fotoğrafta yazı bulunamadı. Daha yakından ve düz çekmeyi dene.');
+          hataKartiGoster(
+            'Bu fotoğrafta yazı bulunamadı. Daha yakından, düz ve gölgesiz çekmeyi dene.',
+            okumaBilgisi);
           continue;
         }
 
@@ -635,10 +646,39 @@
           bilgiGoster('Bu karede ' + parcalar.length + ' sipariş vardı, ayrı ayrı eklendi.');
         }
       } catch (e) {
-        uyar('Fotoğraf okunamadı: ' + e.message);
+        /* HATA KAYBOLMAMALI. Önce kaybolan bir bildirim kullanılıyordu ve
+           sürücü ekrana bakmadığı an "hiçbir şey olmadı" sanıyordu — iPhone'da
+           tam olarak bu yaşandı. Hata artık listenin başına kalıcı bir kart
+           olarak yazılıyor. */
+        hataKartiGoster(e.message, okumaBilgisi);
       }
     }
     bilgiGizle();
+  }
+
+  /**
+   * KALICI HATA KARTI. Kaybolan bildirim yerine listede duruyor; sürücü
+   * ne olduğunu okuyabiliyor, gerekirse ekran görüntüsüyle iletebiliyor.
+   */
+  function hataKartiGoster(mesaj, bilgi) {
+    const alan = $('#taramaSonuc');
+    if (!alan) { uyar(mesaj); return; }
+    const kart = document.createElement('div');
+    kart.className = 'kart kirmizi';
+    const rozet = bilgi && bilgi.dosya
+      ? '<span class="rozet">' + kacis(bilgi.dosya) + '</span>' : '';
+    kart.innerHTML =
+      '<div class="sira">!</div>' +
+      '<div class="govde">' +
+        '<div class="ad">Fotoğraf okunamadı</div>' +
+        '<div class="adres">' + kacis(mesaj) + '</div>' +
+        '<div class="alt">' + rozet +
+          '<button class="dugme kucuk" data-kapat="1">Kapat</button>' +
+        '</div>' +
+      '</div>';
+    kart.querySelector('[data-kapat]').addEventListener('click', () => kart.remove());
+    alan.prepend(kart);
+    sayfaGoster('tara');
   }
 
   /* ------------------------------------------------------------ bilgi */

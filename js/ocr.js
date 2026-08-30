@@ -64,21 +64,70 @@
   }
 
   /**
+   * iOS'ta tuval için toplam piksel tavanı.
+   *
+   * iPhone kamerası 12 MP çekiyor (4032×3024). Bunu 2480 px genişliğe
+   * indirsek bile 2480×1860 ≈ 4,6 MP tuval ediyor ve iOS Safari'nin tuval
+   * bellek bütçesi bunu KAYNAK GÖRÜNTÜYLE BİRLİKTE kaldıramayabiliyor.
+   * Kritik olan şu: iOS bu durumda HATA VERMİYOR — sessizce BOŞ (şeffaf ya da
+   * siyah) bir tuval veriyor. OCR de boş sayfa okuyup "yazı bulunamadı" diyor.
+   * Kullanıcıya "yüklenmiyor" gibi görünen şey tam olarak budur.
+   *
+   * Bu yüzden hem tavan konuyor hem de çizimden sonra tuvalin gerçekten
+   * dolu olup olmadığı DENETLENİYOR (bkz. tuvalBosMu).
+   */
+  const AZAMI_PIKSEL = 4.2e6;
+
+  /** Tuval gerçekten çizildi mi? iOS bellek yetmeyince sessizce boş bırakıyor. */
+  function tuvalBosMu(c, genislik, yukseklik) {
+    /* Görüntünün ortasından ve köşelerinden küçük örnekler alınıyor; hepsi
+       tek renkse (ya da tamamen saydamsa) çizim başarısız demektir. */
+    const noktalar = [
+      [genislik >> 1, yukseklik >> 1], [genislik >> 2, yukseklik >> 2],
+      [(genislik * 3) >> 2, (yukseklik * 3) >> 2], [genislik >> 1, yukseklik >> 2],
+    ];
+    let ilk = null;
+    for (const [x, y] of noktalar) {
+      const p = c.getImageData(Math.max(0, x - 4), Math.max(0, y - 4), 8, 8).data;
+      for (let i = 0; i < p.length; i += 4) {
+        if (p[i + 3] === 0) continue;                  // saydam
+        if (ilk === null) ilk = p[i];
+        else if (Math.abs(p[i] - ilk) > 6) return false;   // renk değişimi var → dolu
+      }
+    }
+    return true;
+  }
+
+  /**
    * Fotoğrafı OCR'a hazırlar: hedef genişliğe ölçekle, gri yap, kontrastı ger.
    * @returns {Promise<HTMLCanvasElement>}
    */
-  function onisle(kaynak) {
+  function onisle(kaynak, kucultmeKatsayisi) {
     return new Promise((coz, hata) => {
       const g = new Image();
       g.onload = () => {
-        const olcek = HEDEF_GENISLIK / g.naturalWidth;
+        let olcek = HEDEF_GENISLIK / g.naturalWidth;
+        /* Piksel tavanı — iOS bellek sınırı için. */
+        const tavanOlcek = Math.sqrt(AZAMI_PIKSEL / (g.naturalWidth * g.naturalHeight));
+        if (tavanOlcek < olcek) olcek = tavanOlcek;
+        if (kucultmeKatsayisi) olcek *= kucultmeKatsayisi;
+
         const t = document.createElement('canvas');
-        t.width = Math.round(g.naturalWidth * olcek);
-        t.height = Math.round(g.naturalHeight * olcek);
+        t.width = Math.max(1, Math.round(g.naturalWidth * olcek));
+        t.height = Math.max(1, Math.round(g.naturalHeight * olcek));
         const c = t.getContext('2d', { willReadFrequently: true });
         c.imageSmoothingEnabled = true;
         c.imageSmoothingQuality = 'high';
+        /* Beyaz zemin: saydam PNG/HEIC'te metin görünmez kalmasın. */
+        c.fillStyle = '#fff';
+        c.fillRect(0, 0, t.width, t.height);
         c.drawImage(g, 0, 0, t.width, t.height);
+
+        if (tuvalBosMu(c, t.width, t.height)) {
+          URL.revokeObjectURL(g.src);
+          hata(Object.assign(new Error('TUVAL_BOS'), { olcek }));
+          return;
+        }
 
         /* Gri tonlama + histogram germe.
            DİKKAT — ham min/max ile germek İŞE YARAMAZ. Ölçüldü: fotoğrafta
@@ -115,9 +164,33 @@
         URL.revokeObjectURL(g.src);
         coz(t);
       };
-      g.onerror = () => hata(new Error('Fotoğraf açılamadı'));
+      g.onerror = () => {
+        URL.revokeObjectURL(g.src);
+        /* iPhone fotoğrafları HEIC biçiminde. Galeriden seçilirken Safari
+           genellikle JPEG'e çeviriyor ama her zaman değil; çevirmezse
+           tarayıcı çözemeyip buraya düşüyor. Kullanıcıya ne yapacağını
+           söylemek gerek, "açılamadı" demek yetmiyor. */
+        hata(new Error('BICIM_DESTEKLENMIYOR'));
+      };
       g.src = kaynak instanceof Blob ? URL.createObjectURL(kaynak) : kaynak;
     });
+  }
+
+  /**
+   * Ön işlemeyi, iOS boş tuval verirse küçülterek yeniden dener.
+   * Her denemede yarıya iniliyor: 12 MP bir fotoğraf sığmazsa 3 MP sığar.
+   */
+  async function onisleDayanikli(kaynak) {
+    const katsayilar = [1, 0.7, 0.5, 0.35];
+    let sonHata = null;
+    for (const k of katsayilar) {
+      try { return await onisle(kaynak, k === 1 ? null : k); }
+      catch (e) {
+        sonHata = e;
+        if (e.message !== 'TUVAL_BOS') break;   // biçim hatasıysa küçültmek işe yaramaz
+      }
+    }
+    throw sonHata || new Error('Fotoğraf hazırlanamadı');
   }
 
   /**
@@ -132,9 +205,27 @@
       return global.OcrYerel.oku(dosya);
     }
 
+    /* Görüntü ÖNCE hazırlanıyor, motor SONRA kuruluyor.
+       Sırası önemli: motor kurulunca ~60 MB WebAssembly belleği tutuluyor ve
+       iOS'ta o bellek üstüne büyük bir tuval açmak sınırı zorluyor. Görüntü
+       küçültülüp hazır olduğunda kaynak fotoğraf serbest kalıyor. */
+    let tuval;
+    try {
+      tuval = await onisleDayanikli(dosya);
+    } catch (e) {
+      if (e.message === 'BICIM_DESTEKLENMIYOR') {
+        throw new Error('Bu fotoğraf biçimi açılamadı. iPhone kullanıyorsan Ayarlar > Kamera > Biçimler > "En Uyumlu" seçeneğini dene.');
+      }
+      if (e.message === 'TUVAL_BOS') {
+        throw new Error('Fotoğraf telefonun belleğine sığmadı. Kamera çözünürlüğünü düşür ya da faturanın yalnız adres kısmını çek.');
+      }
+      throw e;
+    }
+
     const isci = await isciHazirla(ilerleme);
-    const tuval = await onisle(dosya);
     const { data } = await isci.recognize(tuval, {}, { text: true, blocks: true });
+    /* Tuvali hemen boşalt — iOS'ta arka arkaya 50 fatura okutulacak. */
+    tuval.width = tuval.height = 1;
 
     /* Kelime güvenleri bloklar içine gömülü geliyor. */
     const kelimeler = [];
