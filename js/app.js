@@ -167,6 +167,16 @@
    */
   async function metniIsle(hamMetin, ekBilgi) {
     if (!hamMetin || !hamMetin.trim()) return null;
+
+    /* Gün kapatıldıktan sonra elde bir fatura daha çıkarsa gün kendiliğinden
+       geri açılıyor. Sürücü açıkça çalışmaya devam ediyor; onu "önce günü
+       yeniden aç" diye bir adıma zorlamanın anlamı yok. */
+    if (durum.gun && durum.gun.durum === 'kapali') {
+      await D.gunuYenidenAc(durum.gun.tarih);
+      durum.gun = await D.gunAc(durum.gun.tarih);
+      bilgiGoster('Gün kapalıydı, yeni fatura için yeniden açıldı.');
+    }
+
     await ilceleriHazirla([hamMetin]);
 
     const cozum = M.fatura.cozBelge(durum.kaynak, {
@@ -391,6 +401,36 @@
 
   function cizAktif() {
     const alan = $('#aktifAlan');
+
+    /* GÜN KAPANDIYSA ÖZET GÖSTER.
+       Önceden kapanan gün ekranda hiç belli olmuyordu: "Günü Kapat"a basınca
+       aynı liste aynı şekilde duruyordu ve hiçbir şey olmamış gibi
+       görünüyordu. Gün gerçekten kapanıyordu (arşive düşüyordu) ama arayüzde
+       bunun bir karşılığı yoktu. */
+    if (durum.gun.durum === 'kapali') {
+      const o = D.ozet(durum.gun);
+      const km = durum.gun.rota ? (durum.gun.rota.toplamMetre / 1000).toFixed(1) + ' km · ' : '';
+      const yarin = tarihYaz(sonrakiTarih(durum.gun.tarih));
+      alan.innerHTML = `
+        <div class="aktif" style="border-color:var(--yesil);box-shadow:0 4px 16px rgba(21,128,61,.12)">
+          <div class="ust">
+            <div class="no" style="background:var(--yesil)">✓</div>
+            <div><div class="ad">Gün kapandı</div>
+            <div class="ek">${kacis(tarihYaz(durum.gun.tarih))}</div></div>
+          </div>
+          <div class="adres">${o.teslim} teslim${o.basarisiz ? ` · ${o.basarisiz} teslim edilemedi` : ''}${o.bekleyen ? ` · ${o.bekleyen} kaldı` : ''}</div>
+          <div class="ek">${km}${o.parca} parça · ${o.toplam} durak</div>
+          <div class="ek" style="margin-top:8px">
+            Yeni liste <b>${kacis(yarin)}</b> sabahı boş başlayacak.
+            Bugünün kaydı Arşiv'de duruyor.
+          </div>
+          <div class="eylem">
+            <button class="dugme" data-eylem="gunYenidenAc">↩︎ Günü Yeniden Aç</button>
+          </div>
+        </div>`;
+      return;
+    }
+
     const d = durum.gun.rota ? D.siradaki(durum.gun) : null;
     if (!d) { alan.innerHTML = ''; return; }
     alan.innerHTML = `
@@ -457,6 +497,8 @@
     const gosterilecek = durum.sayfa === 'bugun' && o.toplam > 0;
     $('#sayfa-bugun').classList.toggle('yuzenli', gosterilecek);
     if (!gosterilecek) { alan.innerHTML = ''; return; }
+    /* Kapanmış günde yüzen düğme olmaz — eylem özet kartının içinde. */
+    if (durum.gun.durum === 'kapali') { alan.innerHTML = ''; return; }
     const varRota = !!durum.gun.rota;
     const kalan = o.bekleyen;
     if (varRota && !kalan) {
@@ -471,6 +513,14 @@
     const p = [d.mahalle && d.mahalle + ' Mh.', d.yol, d.kapino && 'No ' + d.kapino,
                d.daire && 'D:' + d.daire, d.ilce].filter(Boolean);
     return p.length ? p.join(' · ') : 'Adres okunamadı';
+  }
+
+  /** "2026-08-30" → "2026-08-31". Kapanış özetinde yeni günü söylemek için. */
+  function sonrakiTarih(t) {
+    const [y, a, g] = t.split('-').map(Number);
+    const d = new Date(y, a - 1, g + 1);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
   function tarihYaz(t) {
@@ -628,11 +678,20 @@
         case 'duzelt': duzeltAc(id); break;
         case 'ac': duzeltAc(id); break;
         case 'gunKapat':
-          if (confirm('Günü kapatayım mı? Yarın liste boş başlayacak.')) {
+          if (confirm('Günü kapatayım mı?\nBugünün kaydı arşive geçer, yeni liste yarın sabah boş başlar.')) {
             await D.gunKapat(durum.gun.tarih);
-            durum.gun = await D.gunAc();
+            /* Aynı takvim gününde ikinci bir gün açılamaz (tarih birincil
+               anahtar) ve açılmamalı da — o gün hâlâ aynı gün. Kapanan gün
+               yeniden okunup ekranda "kapandı" özeti gösteriliyor. */
+            durum.gun = await D.gunAc(durum.gun.tarih);
             ciz();
           }
+          break;
+        case 'gunYenidenAc':
+          await D.gunuYenidenAc(durum.gun.tarih);
+          durum.gun = await D.gunAc(durum.gun.tarih);
+          ciz();
+          bilgiGoster('Gün yeniden açıldı.');
           break;
       }
     });

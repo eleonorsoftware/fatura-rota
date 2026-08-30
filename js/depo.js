@@ -124,6 +124,23 @@
     return g;
   }
 
+  /**
+   * Kapatılan günü geri açar.
+   *
+   * İki durumda gerekiyor: sürücü yanlışlıkla kapattığında, ve gün kapandıktan
+   * sonra elinde bir fatura daha çıktığında. Aynı takvim gününde ikinci bir
+   * "gün" kaydı açılamıyor (tarih birincil anahtar) — zaten doğrusu da bu:
+   * o gün hâlâ aynı gün.
+   */
+  async function gunuYenidenAc(tarih) {
+    const g = await getir('gun', tarih);
+    if (!g) return null;
+    g.durum = 'acik';
+    g.kapanis = null;
+    await gunKaydet(g);
+    return g;
+  }
+
   function ozet(g) {
     const d = (g && g.duraklar) || [];
     return {
@@ -300,7 +317,7 @@
 
   global.Depo = {
     ac, isGunu, telefonAnahtari,
-    gunAc, gunKaydet, gunler, gunKapat, ozet,
+    gunAc, gunKaydet, gunler, gunKapat, gunuYenidenAc, ozet,
     durakEkle, durakSil, durakDuzelt, durumYaz, rotaKaydet, siraliDuraklar, siradaki,
     hafizayaYaz, hafizadanAra, hafizaNotu, musteriler,
     ayarGetir, ayarYaz,
