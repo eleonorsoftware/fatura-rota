@@ -249,37 +249,87 @@
 
   /* ═══════════════════════════════════════════════════════════ rota ═══ */
 
-  async function rotaOlustur() {
+  /**
+   * ROTAYA GİRMEMİŞ DURAKLAR.
+   *
+   * ⚠️ GERÇEK GÜN KAYDINDA ÖLÇÜLDÜ (2026-08-30): 20 durağın YALNIZ 14'Ü
+   * rotadaydı. Kalan 6'sı rota çıkarıldıktan SONRA okutulmuş ve sıra
+   * numarası hiç almamıştı; ekranda da bunun bir işareti yoktu. Sürücü
+   * 14 duraklık turu bitirip kalan 6'ya ayrı çıksa 303,8 km ediyor;
+   * yirmisi birlikte sıralansa 262,6 km. **Günde 41 km boşuna.**
+   * Sorun rota algoritmasında değil, rotanın BAYATLAMASINDAYDI.
+   */
+  function rotaDisiDuraklar() {
+    if (!durum.gun || !durum.gun.rota) return [];
+    return (durum.gun.duraklar || []).filter(
+      (d) => d.durum === 'bekliyor' && d.lat != null && d.sira == null);
+  }
+
+  /**
+   * Yeni durak eklendikten sonra rotayı kendiliğinden tazeler.
+   *
+   * Sabah okutma aşamasındaysa (henüz hiç teslimat yapılmadıysa) sessizce
+   * yeniden sıralanıyor — kullanıcının istediği davranış bu: "her gün toplam
+   * faturaya göre bulunduğu konumdan en uygun rota".
+   * Yola çıkıldıysa SIRA KENDİLİĞİNDEN DEĞİŞTİRİLMİYOR; sürücü sırayı
+   * ezberlemiş olabilir, kararı ona bırakılıp uyarı gösteriliyor.
+   */
+  async function rotayiTazeleGerekirse() {
+    const disarida = rotaDisiDuraklar();
+    if (!disarida.length) return;
+    const o = D.ozet(durum.gun);
+    if (o.teslim || o.basarisiz) return;          // yola çıkılmış — dokunma, uyar
+    await rotaOlustur({ sessiz: true });
+    bilgiGoster(`Rota güncellendi — ${disarida.length} yeni durak sıraya girdi.`);
+  }
+
+  async function rotaOlustur(ayar) {
+    const sessiz = !!(ayar && ayar.sessiz);
     const bekleyen = D.siraliDuraklar(durum.gun).filter((d) => d.durum === 'bekliyor');
     const koordinatli = bekleyen.filter((d) => d.lat != null);
     const koordinatsiz = bekleyen.length - koordinatli.length;
 
-    if (!koordinatli.length) { uyar('Rotaya girecek adres yok.'); return; }
-    if (koordinatsiz) {
+    if (!koordinatli.length) { if (!sessiz) uyar('Rotaya girecek adres yok.'); return; }
+    if (koordinatsiz && !sessiz) {
       if (!confirm(`${koordinatsiz} adres okunamadı, rotaya giremeyecek.\nYine de rotayı çıkarayım mı?`)) return;
     }
     const supheli = koordinatli.filter((d) => d.renk !== 'yesil').length;
-    if (supheli && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
+    if (supheli && !sessiz && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
 
     /* BAŞLANGIÇ = SÜRÜCÜNÜN O ANKİ KONUMU. Taze isteniyor, beklenmiyor değil.
        Önbellekteki konum sabah evde alınmış olabilir; rota depodan değil
        evden başlar ve bütün sıra kayar. */
     let baslangic = null, baslangicKaynak = 'konum';
     try {
-      bilgiGoster('Konumun alınıyor…', true);
-      baslangic = await konumAl({ sure: 10000, enFazlaYas: 15000 });
+      if (!sessiz) bilgiGoster('Konumun alınıyor…', true);
+      /* Sessiz tazelemede önbellekteki konum yeterli: sürücü hâlâ fatura
+         okutuyor, yerinden kalkmamış. Her okutmada GPS'e gitmek pil yer. */
+      baslangic = await konumAl({ sure: sessiz ? 6000 : 10000, enFazlaYas: sessiz ? 120000 : 15000 });
     } catch (e) {
       /* Konum yoksa SESSİZCE ilk durağa düşmek yanlış rota üretiyordu.
          Sürücüye ne olduğunu söyleyip kararı ona bırakıyoruz. */
       bilgiGizle();
-      const devam = confirm(
-        e.message + '\n\n' +
-        'Konum olmadan rota, İLK OKUTULAN ADRESTEN başlatılır ve sıra ' +
-        'bulunduğun yere göre olmaz.\n\n' +
-        'Yine de bu şekilde çıkarayım mı?');
-      if (!devam) { uyar('Rota çıkarılmadı — konum izni verip tekrar dene.'); return; }
-      baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
-      baslangicKaynak = 'ilk-durak';
+      if (sessiz) {
+        /* Tazeleme sırasında konum yoksa eski başlangıç korunuyor; sıra
+           yine de tazeleniyor ki yeni duraklar dışarıda kalmasın. */
+        const r = durum.gun.rota;
+        if (r && r.baslangicLat != null) {
+          baslangic = { lat: r.baslangicLat, lng: r.baslangicLng };
+          baslangicKaynak = r.baslangicKaynak || 'onceki';
+        } else {
+          baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
+          baslangicKaynak = 'ilk-durak';
+        }
+      } else {
+        const devam = confirm(
+          e.message + '\n\n' +
+          'Konum olmadan rota, İLK OKUTULAN ADRESTEN başlatılır ve sıra ' +
+          'bulunduğun yere göre olmaz.\n\n' +
+          'Yine de bu şekilde çıkarayım mı?');
+        if (!devam) { uyar('Rota çıkarılmadı — konum izni verip tekrar dene.'); return; }
+        baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
+        baslangicKaynak = 'ilk-durak';
+      }
     }
 
     const noktalar = koordinatli.map((d) => ({ lat: d.lat, lng: d.lng }));
@@ -294,7 +344,7 @@
     const anahtar = await D.ayarGetir('orsAnahtar', null);
     if (anahtar && noktalar.length + 1 <= M.ors.AZAMI_NOKTA) {
       try {
-        bilgiGoster('Gerçek yol süreleri alınıyor…', true);
+        if (!sessiz) bilgiGoster('Gerçek yol süreleri alınıyor…', true);
         matris = await M.ors.matrisAl([baslangic, ...noktalar], anahtar);
         birim = 'sure';
         bilgiGoster(matris.bosluk
@@ -315,10 +365,10 @@
       yontem: r.yontem,
     });
     bilgiGizle();
-    if (baslangicKaynak === 'ilk-durak') {
+    if (baslangicKaynak === 'ilk-durak' && !sessiz) {
       uyar('Rota, konum alınamadığı için ilk okutulan adresten başlatıldı.');
     }
-    sayfaGoster('bugun');
+    if (!sessiz) sayfaGoster('bugun');
     ciz();
   }
 
@@ -527,6 +577,19 @@
     if (o.kirmizi) parca.push(`<div class="uyari kirmizi">⚠ <div><b>${o.kirmizi} adres okunamadı.</b> Rotaya giremezler — dokunup elle düzelt.</div></div>`);
     if (o.sari) parca.push(`<div class="uyari">⚠ <div><b>${o.sari} adres kontrol bekliyor.</b> Doğruysa dokunup onayla.</div></div>`);
 
+    /* ROTAYA GİRMEMİŞ DURAK VARSA EN ÜSTTE, KIRMIZI.
+       Gerçek kayıtta 20 durağın 6'sı rotanın dışında kalmıştı ve ekranda
+       hiçbir işareti yoktu — sürücü 41 km fazla yol yapardı. */
+    const disarida = rotaDisiDuraklar();
+    if (disarida.length) {
+      parca.unshift(`<div class="uyari kirmizi">⚠ <div>
+        <b>${disarida.length} durak rotada değil.</b>
+        Rota çıkarıldıktan sonra okutuldular; listenin sonunda "rotada değil"
+        yazan kartlar onlar. Bu hâlde gidersen aynı bölgeye iki kez çıkarsın.
+        <button class="dugme kucuk" data-eylem="rota" style="margin-top:6px">🔄 Rotayı yenile — ${disarida.length} durağı da kat</button>
+      </div></div>`);
+    }
+
     /* ROTANIN NEREDEN BAŞLADIĞI GÖRÜNMELİ.
        Sıra mantıksız göründüğünde ilk sorulacak soru budur; ekranda
        yazmadığı için sürücü rotanın yanlış yerden kurulduğunu göremiyordu. */
@@ -592,6 +655,9 @@
             ${d.keskinlik === 'yol' ? '<span class="rozet sari">kapı no yok</span>' : ''}
             ${d.elleDuzeltildi ? '<span class="rozet yesil">elle düzeltildi</span>' : ''}
             ${araliklar[d.id] != null ? `<span class="rozet">${araliklar[d.id].toFixed(1)} km</span>` : ''}
+            ${durum.gun.rota && d.sira == null && d.durum === 'bekliyor' && d.lat != null
+              ? '<span class="rozet kirmizi">rotada değil</span>' : ''}
+            ${ayniAdresSayisi(d) > 1 ? `<span class="rozet sari">aynı adrese ${ayniAdresSayisi(d)} teslimat</span>` : ''}
           </div>
         </div>
       </div>`).join('');
@@ -634,6 +700,23 @@
     return sonuc;
   }
 
+  /**
+   * Aynı adrese kaç teslimat var?
+   *
+   * Gerçek kayıtta aynı adres iki ayrı durak olarak duruyordu (Adalet Mh.
+   * 10081. sk. no 13, iki kez). İkisi de geçerli olabilir — bir eve iki ayrı
+   * sipariş çıkabiliyor — ama aynı belgenin iki kez okutulmuş olması da
+   * mümkün ve o zaman sürücü aynı kapıya iki kez gidiyor.
+   * Tekilleştirme belge numarasına bakıyor; belge numarası okunamamışsa
+   * yakalanamıyor. Bu yüzden karar sürücüye bırakılıp sadece işaretleniyor.
+   */
+  function ayniAdresSayisi(d) {
+    if (!durum.gun || d.lat == null) return 1;
+    const anahtar = (x) => x.lat.toFixed(5) + ',' + x.lng.toFixed(5);
+    const k = anahtar(d);
+    return (durum.gun.duraklar || []).filter((x) => x.lat != null && anahtar(x) === k).length;
+  }
+
   function adresYaz(d) {
     const p = [d.mahalle && d.mahalle + ' Mh.', d.yol, d.kapino && 'No ' + d.kapino,
                d.daire && 'D:' + d.daire, d.ilce].filter(Boolean);
@@ -674,6 +757,8 @@
           ${sonuc.birlestirildi ? '<span class="rozet">aynı belge — birleştirildi</span>'
                                : '<span class="rozet yesil">yeni durak</span>'}
           ${d.renk !== 'yesil' ? `<span class="rozet ${d.renk}">${d.renk === 'kirmizi' ? 'okunamadı' : 'kontrol et'}</span>` : ''}
+          ${!sonuc.birlestirildi && ayniAdresSayisi(d) > 1
+            ? `<span class="rozet sari">aynı adrese ${ayniAdresSayisi(d)}. teslimat — aynı belgeyi iki kez okutmuş olabilirsin</span>` : ''}
           ${kutuVar ? `<button class="dugme kucuk birincil" data-kutu="${kareId}">📐 Adresi göster</button>` : ''}
           <button class="dugme kucuk" data-eylem="duzelt" data-id="${d.id}">Düzelt</button>
           <button class="dugme kucuk kirmizi" data-eylem="durakSil" data-id="${d.id}">Sil</button>
@@ -922,8 +1007,10 @@
     for (const g of gunler) {
       const liste = D.siraliDuraklar(g);
       const r = g.rota;
+      const rotada = liste.filter((d) => d.sira != null).length;
       satir.push('');
-      satir.push('═══ ' + g.tarih + '  (' + g.durum + ')  ' + liste.length + ' durak');
+      satir.push('═══ ' + g.tarih + '  (' + g.durum + ')  ' + liste.length + ' durak' +
+        (r ? '  · rotada ' + rotada + (rotada < liste.length ? '  ⚠ ' + (liste.length - rotada) + ' DURAK ROTA DIŞI' : '') : ''));
       if (r) {
         satir.push('  rota: başlangıç ' + (r.baslangicLat != null
             ? r.baslangicLat.toFixed(5) + ',' + r.baslangicLng.toFixed(5) : 'YOK') +
@@ -942,9 +1029,11 @@
         satir.push(
           '  ' + String(d.sira ?? '·').padStart(3) + '. ' +
           String(km).padStart(5) + 'km  ' +
+          (d.durum || '?').padEnd(9) +
           (d.lat != null ? d.lat.toFixed(5) + ',' + d.lng.toFixed(5) : 'koordinat yok').padEnd(20) + ' ' +
           String(d.guven ?? '').padStart(3) + ' ' + (d.renk || '').padEnd(8) +
-          (d.keskinlik || '').padEnd(5) + ' | ' +
+          (d.keskinlik || '').padEnd(5) + ' p' + (d.parca || 1) +
+          ' | ' +
           [d.ilce, d.mahalle, d.yol, d.kapino && 'no ' + d.kapino, d.daire && 'd' + d.daire]
             .filter(Boolean).join(' / '));
         if (d.lat != null) onceki = { lat: d.lat, lng: d.lng };
@@ -969,6 +1058,7 @@
     if (!dosyalar || !dosyalar.length) return;
     if (!window.Ocr) { uyar('Okuma katmanı yüklenemedi.'); return; }
     if (!dosyalariIsle._sayac) dosyalariIsle._sayac = 0;
+    let yeniDurakEklendi = false;
 
     let sira = 0;
     for (const dosya of dosyalar) {
@@ -1038,6 +1128,7 @@
           bilgiGoster('Bu karede ' + parcalar.length + ' sipariş vardı, ayrı ayrı eklendi.');
         }
         if (!kirmizi) bekleyenKareler.delete(kareId);
+        yeniDurakEklendi = true;
       } catch (e) {
         /* HATA KAYBOLMAMALI. Önce kaybolan bir bildirim kullanılıyordu ve
            sürücü ekrana bakmadığı an "hiçbir şey olmadı" sanıyordu — iPhone'da
@@ -1047,6 +1138,16 @@
       }
     }
     bilgiGizle();
+
+    /* OKUTMA BİTİNCE ROTAYI TAZELE.
+       Ölçülen gerçek kayıtta rota 20:13'te 14 durakla çıkarılmış, sonra 6
+       fatura daha okutulmuş ve o 6'sı rotaya HİÇ girmemişti. Sürücünün
+       "Rotayı Yenile"ye basmasını beklemek yerine, henüz yola çıkılmadıysa
+       kendiliğinden tazeleniyor. */
+    if (yeniDurakEklendi) {
+      try { await rotayiTazeleGerekirse(); } catch (_) { /* rota kalsın, okuma önemli */ }
+      ciz();
+    }
   }
 
   /* ══════════════════════════════════ adresi parmakla göster ═══ */

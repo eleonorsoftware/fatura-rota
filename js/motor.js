@@ -2613,6 +2613,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830212646',
+    surum: '20260830213800',
   };
 })(typeof self !== 'undefined' ? self : this);
