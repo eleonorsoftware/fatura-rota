@@ -17,10 +17,12 @@ const SURUM = 'rota-v1';
 const KABUK = 'kabuk-' + SURUM;
 const VERI = 'veri-' + SURUM;
 
+/* Sürüm damgalı adresler (js/app.js?s=…) burada listelenmiyor: her yayında
+   değişiyorlar ve eski liste 404 üretirdi. Kurulumda yalnız sabit adresler
+   önbelleğe alınıyor; damgalı dosyalar ilk istekte ağdan gelip aşağıdaki
+   kural gereği önbelleğe yazılıyor. */
 const KABUK_DOSYALARI = [
   './', './index.html', './manifest.json',
-  './css/stil.css', './js/motor.js', './js/depo.js', './js/app.js',
-  './js/ocr.js', './ocr/tesseract.min.js',
 ];
 
 self.addEventListener('install', (e) => {
