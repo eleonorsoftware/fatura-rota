@@ -649,8 +649,15 @@
     });
     $('#btnMetinTemizle').addEventListener('click', () => { $('#metinGirdi').value = ''; });
 
-    $('#btnDuzeltIptal').addEventListener('click', () => $('#katmanDuzelt').classList.remove('acik'));
+    const duzeltKapat = () => $('#katmanDuzelt').classList.remove('acik');
+    $('#btnDuzeltIptal').addEventListener('click', duzeltKapat);
+    $('#btnDuzeltKapat').addEventListener('click', duzeltKapat);
     $('#btnDuzeltKaydet').addEventListener('click', duzeltKaydet);
+    /* Telefonun geri düğmesi/kaydırması pencereyi kapatsın — kullanıcı
+       içgüdüsel olarak onu deniyor ve tepki vermeyince sıkışmış hissediyor. */
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && $('#katmanDuzelt').classList.contains('acik')) duzeltKapat();
+    });
     $('#btnDurakSil').addEventListener('click', async () => {
       if (!confirm('Bu durak silinsin mi?')) return;
       await D.durakSil(durum.gun, durum.duzeltilenId);

@@ -10,7 +10,7 @@
 <title>Fatura Rota</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="ikon/ikon-180.png">
-<link rel="stylesheet" href="css/stil.css?s=20260830191951">
+<link rel="stylesheet" href="css/stil.css?s=20260830192405">
 </head>
 <body>
 
@@ -97,28 +97,37 @@
 <!-- düzeltme katmanı -->
 <div class="katman" id="katmanDuzelt">
   <div class="icerik">
-    <h2>Adresi düzelt</h2>
-    <div id="duzeltUyari"></div>
-    <label>Alıcı</label><input id="dAd" autocomplete="off">
-    <label>Telefon</label><input id="dTel" type="tel" autocomplete="off">
-    <label>İlçe</label><select id="dIlce"></select>
-    <label>Mahalle</label><input id="dMahalle" autocomplete="off" placeholder="ör. Karaman">
-    <label>Sokak / Cadde</label><input id="dYol" autocomplete="off" placeholder="ör. Yeşilköy">
-    <label>Kapı no</label><input id="dKapino" autocomplete="off" placeholder="ör. 281">
-    <label>Daire</label><input id="dDaire" autocomplete="off">
-    <div id="duzeltSonuc" style="margin-top:12px"></div>
-    <div class="dugme-sirasi" style="margin-top:14px">
-      <button class="dugme" id="btnDuzeltIptal">Vazgeç</button>
-      <button class="dugme birincil" id="btnDuzeltKaydet">Kaydet</button>
+    <div class="katman-ust">
+      <button class="katman-kapat" id="btnDuzeltKapat" aria-label="Kapat">✕</button>
+      <h2>Adresi düzelt</h2>
+      <button class="katman-sil" id="btnDurakSil">Sil</button>
     </div>
-    <button class="dugme kirmizi" id="btnDurakSil" style="margin-top:8px">Bu durağı sil</button>
+
+    <div class="katman-govde">
+      <div id="duzeltUyari"></div>
+      <label>Alıcı</label><input id="dAd" autocomplete="off">
+      <label>Telefon</label><input id="dTel" type="tel" autocomplete="off">
+      <label>İlçe</label><select id="dIlce"></select>
+      <label>Mahalle</label><input id="dMahalle" autocomplete="off" placeholder="ör. Karaman">
+      <label>Sokak / Cadde</label><input id="dYol" autocomplete="off" placeholder="ör. Yeşilköy">
+      <label>Kapı no</label><input id="dKapino" autocomplete="off" placeholder="ör. 281">
+      <label>Daire</label><input id="dDaire" autocomplete="off">
+      <div id="duzeltSonuc" style="margin-top:12px"></div>
+    </div>
+
+    <div class="katman-alt">
+      <div class="dugme-sirasi">
+        <button class="dugme" id="btnDuzeltIptal">Vazgeç</button>
+        <button class="dugme birincil" id="btnDuzeltKaydet">Kaydet</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <script src="ocr/tesseract.min.js?s=20260830185945"></script>
-<script src="js/ocr.js?s=20260830191951"></script>
-<script src="js/motor.js?s=20260830191951"></script>
-<script src="js/depo.js?s=20260830191951"></script>
-<script src="js/app.js?s=20260830191951"></script>
+<script src="js/ocr.js?s=20260830192405"></script>
+<script src="js/motor.js?s=20260830192405"></script>
+<script src="js/depo.js?s=20260830192405"></script>
+<script src="js/app.js?s=20260830192405"></script>
 </body>
 </html>
