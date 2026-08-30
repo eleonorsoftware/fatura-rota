@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#1d4ed8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Rota">
+<title>Fatura Rota</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="ikon/ikon-180.png">
+<link rel="stylesheet" href="css/stil.css">
+</head>
+<body>
+
+<div class="yukleme" id="yukleme">
+  <div>
+    <div style="font-size:34px">🚚</div>
+    <div style="font-weight:650;margin-top:8px">Fatura Rota</div>
+    <div id="yuklemeMetin" style="color:#5b6472;font-size:14px;margin-top:4px">Adres verisi hazırlanıyor…</div>
+    <div class="cubuk"><i id="yuklemeCubuk"></i></div>
+  </div>
+</div>
+
+<header class="baslik">
+  <h1 id="sayfaBaslik">Bugün</h1>
+  <span class="tarih" id="gunTarih"></span>
+</header>
+
+<!-- ═══════════════════════════ BUGÜN ═══════════════════════════ -->
+<main class="sayfa etkin" id="sayfa-bugun">
+  <div class="sayac">
+    <div><b id="sDurak">0</b><span>durak</span></div>
+    <div><b id="sTeslim">0</b><span>teslim</span></div>
+    <div><b id="sKalan">0</b><span>kalan</span></div>
+    <div><b id="sKm">—</b><span>km</span></div>
+  </div>
+  <div id="aktifAlan"></div>
+  <div id="uyariAlan"></div>
+  <div id="durakListe"></div>
+  <div class="imza">Powered by Eleonor Software</div>
+</main>
+
+<!-- ═══════════════════════════ TARA ═══════════════════════════ -->
+<main class="sayfa" id="sayfa-tara">
+  <div class="tarama-alan">
+    <button class="dugme birincil" id="btnKamera">📷 Fotoğraf Çek</button>
+    <input type="file" accept="image/*" capture="environment" id="girdiKamera" class="gizli-girdi">
+    <button class="dugme" id="btnGaleri">🖼️ Galeriden Seç</button>
+    <input type="file" accept="image/*" multiple id="girdiGaleri" class="gizli-girdi">
+    <details>
+      <summary style="padding:10px 2px;font-size:14px;color:#5b6472;cursor:pointer">Metni elle yapıştır</summary>
+      <textarea class="metin" id="metinGirdi" placeholder="Faturadan okunan metni buraya yapıştır…&#10;&#10;Örnek:&#10;KARAMAN MH YEŞİLKÖY CD NO:281 D:7 TR 20100 DENİZLİ"></textarea>
+      <div class="dugme-sirasi" style="margin-top:8px">
+        <button class="dugme kucuk birincil" id="btnMetinEkle">Ekle</button>
+        <button class="dugme kucuk" id="btnMetinTemizle">Temizle</button>
+      </div>
+    </details>
+  </div>
+  <div id="taramaSonuc"></div>
+</main>
+
+<!-- ═══════════════════════════ ARŞİV ═══════════════════════════ -->
+<main class="sayfa" id="sayfa-arsiv">
+  <div id="arsivListe"></div>
+  <div id="hafizaOzet" style="margin-top:18px"></div>
+</main>
+
+<!-- yüzen eylem -->
+<div class="yuzen" id="yuzenAlan"></div>
+
+<!-- alt çubuk -->
+<nav class="alt">
+  <button data-sayfa="tara"><span class="ikon">📷</span>Tara</button>
+  <button data-sayfa="bugun" class="etkin"><span class="ikon">📋</span>Bugün<span class="rozet-sayi" id="rozetBugun" hidden>0</span></button>
+  <button data-sayfa="arsiv"><span class="ikon">🗂️</span>Arşiv</button>
+</nav>
+
+<!-- düzeltme katmanı -->
+<div class="katman" id="katmanDuzelt">
+  <div class="icerik">
+    <h2>Adresi düzelt</h2>
+    <div id="duzeltUyari"></div>
+    <label>Alıcı</label><input id="dAd" autocomplete="off">
+    <label>Telefon</label><input id="dTel" type="tel" autocomplete="off">
+    <label>İlçe</label><select id="dIlce"></select>
+    <label>Mahalle</label><input id="dMahalle" autocomplete="off" placeholder="ör. Karaman">
+    <label>Sokak / Cadde</label><input id="dYol" autocomplete="off" placeholder="ör. Yeşilköy">
+    <label>Kapı no</label><input id="dKapino" autocomplete="off" placeholder="ör. 281">
+    <label>Daire</label><input id="dDaire" autocomplete="off">
+    <div id="duzeltSonuc" style="margin-top:12px"></div>
+    <div class="dugme-sirasi" style="margin-top:14px">
+      <button class="dugme" id="btnDuzeltIptal">Vazgeç</button>
+      <button class="dugme birincil" id="btnDuzeltKaydet">Kaydet</button>
+    </div>
+    <button class="dugme kirmizi" id="btnDurakSil" style="margin-top:8px">Bu durağı sil</button>
+  </div>
+</div>
+
+<script src="ocr/tesseract.min.js"></script>
+<script src="js/ocr.js"></script>
+<script src="js/motor.js"></script>
+<script src="js/depo.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
