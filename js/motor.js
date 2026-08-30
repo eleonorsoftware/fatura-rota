@@ -1729,6 +1729,41 @@ const VARSAYILAN = {
   hizKmS: 25,          // Denizli şehir içi, trafik dâhil kaba ortalama
   durakDakika: 6,      // park + kapıya çıkma + teslim + imza
   dolambacKatsayisi: 1.35,  // kuş uçuşu mesafeyi gerçek yola yaklaştırır
+
+  /**
+   * MAHALLE DEĞİŞTİRME BEDELİ (metre karşılığı).
+   *
+   * NEDEN VAR — kullanıcının bildirdiği durum: "iki adres Yenişafak
+   * mahallesinde ama araya bir de Adalet mahallesi atıyor."
+   *
+   * Ölçüldü (test/mahalle-kumesi.js, 150 gün × 20 durak, gerçek Denizli
+   * koordinatları): sıralayıcı bunu yaptığında HATA YAPMIYOR — kusursuz
+   * optimum da aynı oranda bölüyor (%100 aynı maliyet, ikisinde de günde
+   * 0,25 mahalle bölünüyor). Yani kısa yol gerçekten oradan geçiyor.
+   *
+   * AMA mesafe modeli sahadaki bir maliyeti GÖRMÜYOR: yeni bir mahalleye
+   * girince park yeri aramak, sokağı ve apartmanı bulmak baştan başlıyor.
+   * Aynı mahalledeki ikinci teslimatta bunların çoğu atlanıyor.
+   *
+   * Bu sabit, o görünmeyen maliyetin metre cinsinden karşılığı. Ölçülen
+   * bedel tablosu (aynı testten):
+   *
+   *   K        ortalama fazladan   en kötü gün   bölünen mahalle/gün
+   *   0                        —             —                  0,26
+   *   600 m             +0,03 km      +0,60 km                  0,10
+   *   1000 m            +0,04 km      +0,81 km                  0,08   ← seçildi
+   *   2500 m            +0,11 km      +1,78 km                  0,03
+   *   5000 m            +0,22 km      +4,46 km                  0,00
+   *
+   * 1000 m seçildi: günde ortalama 40 metreye mal oluyor, en kötü günde bile
+   * 1 km'yi aşmıyor, buna karşılık mahalle bölünmesini %70 azaltıyor.
+   * Daha büyüğü bölünmeyi tamamen bitiriyor ama kötü günlerde 4-5 km
+   * yazdırıyor — o zaman "gereksiz yere uzağa gitti" şikâyeti haklı olurdu.
+   *
+   * Bölünme yine de olabiliyor: o zaman kazanç 1 km'den fazla demektir,
+   * yani gerçekten değiyor.
+   */
+  grupBedeliMetre: 1000,
 };
 
 /* ------------------------------------------------------------- mesafe */
@@ -1945,6 +1980,53 @@ function yerelIyilestir(sira, m) {
   return sira;
 }
 
+/**
+ * MAHALLE (grup) DEĞİŞTİRME BEDELİNİ MATRİSE İŞLER.
+ *
+ * `secenek.grup` her durağın grup etiketi (mahalle adı). Boş/null olanlar
+ * KENDİ BAŞINA bir grup sayılıyor — adresi çözülememiş bir durak yüzünden
+ * yanlışlıkla kümelenme olmasın.
+ *
+ * Birim önemli: matris saniye cinsindense bedel de saniyeye çevriliyor,
+ * yoksa 1000 "metre" saniye sanılıp 16 dakikalık bir ceza olurdu.
+ */
+function grupCezasi(m, secenek, N) {
+  const grup = secenek.grup;
+  if (!Array.isArray(grup) || grup.length !== N) return m;
+  const bedelMetre = secenek.grupBedeli != null ? secenek.grupBedeli : VARSAYILAN.grupBedeliMetre;
+  if (!bedelMetre) return m;
+  const bedel = secenek.birim === 'sure'
+    ? bedelMetre / 1000 / VARSAYILAN.hizKmS * 3600      // metre → saniye
+    : bedelMetre;
+
+  /* Etiketsiz duraklar benzersiz kılınıyor. */
+  const etiket = grup.map((g, i) =>
+    (g == null || String(g).trim() === '') ? ' tek' + i : String(g));
+
+  const n = m.length;
+  const c = Array.from({ length: n }, () => new Float64Array(n));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      /* 0. düğüm başlangıç konumu; onun mahallesi yok, geçiş sayılmıyor. */
+      const gecis = i > 0 && j > 0 && etiket[i - 1] !== etiket[j - 1];
+      c[i][j] = m[i][j] + (gecis ? bedel : 0);
+    }
+  }
+  return c;
+}
+
+/** Rotada kaç mahalle birden fazla parçaya bölünmüş? (uyarı göstermek için) */
+function bolunenGruplar(sira, grup) {
+  if (!Array.isArray(grup)) return [];
+  const dizi = sira.map((i) => grup[i]).filter((g) => g != null && String(g).trim() !== '');
+  const parca = {};
+  for (let i = 0; i < dizi.length; i++) {
+    if (i === 0 || dizi[i] !== dizi[i - 1]) parca[dizi[i]] = (parca[dizi[i]] || 0) + 1;
+  }
+  return Object.keys(parca).filter((g) => parca[g] > 1);
+}
+
 /* ------------------------------------------------------------- ana giriş */
 
 /**
@@ -1973,6 +2055,12 @@ function sirala(baslangic, duraklar, secenek = {}) {
     throw new Error(`Matris boyutu ${m.length}, beklenen ${N + 1} (başlangıç + ${N} durak)`);
   }
 
+  /* ARAMA MATRİSİ ≠ ÖLÇÜM MATRİSİ.
+     Sıralama, mahalle değiştirmeye küçük bir bedel EKLENMİŞ matris üzerinde
+     yapılıyor; ama sonuçta kullanıcıya söylenen mesafe/süre HER ZAMAN gerçek
+     matristen ölçülüyor. Yoksa ekranda uydurma bir km yazardı. */
+  const aramaMatrisi = grupCezasi(m, secenek, N);
+
   /* BİRDEN ÇOK BAŞLANGIÇ.
      En yakın komşu kısa görüşlü: ilk adımda en yakına gitmek, sonraki
      adımları çıkmaza sokabiliyor. Bu yüzden "en yakın komşu" ile birlikte
@@ -1987,14 +2075,14 @@ function sirala(baslangic, duraklar, secenek = {}) {
      düğmeye bastıktan sonra beklenen süre demek. Tohum sayısı ölçeğe göre
      kısılıyor ve süre tavanı BURADA DA geçerli. */
   const tohumSayisi = N <= 20 ? 4 : N <= 35 ? 3 : 2;
-  const tohumlar = [enYakinKomsu(m)];
-  for (let k = 1; k <= Math.min(tohumSayisi - 1, N - 1); k++) tohumlar.push(enYakinKomsu(m, k));
+  const tohumlar = [enYakinKomsu(aramaMatrisi)];
+  for (let k = 1; k <= Math.min(tohumSayisi - 1, N - 1); k++) tohumlar.push(enYakinKomsu(aramaMatrisi, k));
 
   let enIyi = null, enIyiMaliyet = Infinity;
   for (const t of tohumlar) {
     if (enIyi && Date.now() - anBaslangic > sureTavaniBas * 0.6) break;
-    const s = yerelIyilestir(t.slice(), m);
-    const c = maliyet(s, m);
+    const s = yerelIyilestir(t.slice(), aramaMatrisi);
+    const c = maliyet(s, aramaMatrisi);
     if (c < enIyiMaliyet) { enIyiMaliyet = c; enIyi = s; }
   }
 
@@ -2014,12 +2102,20 @@ function sirala(baslangic, duraklar, secenek = {}) {
   let tur = 0;
   for (; tur < turSayisi; tur++) {
     if (Date.now() - anBaslangic > sureTavaniBas) break;
-    const aday = yerelIyilestir(ciftKopru(enIyi, rast), m);
-    const c = maliyet(aday, m);
+    const aday = yerelIyilestir(ciftKopru(enIyi, rast), aramaMatrisi);
+    const c = maliyet(aday, aramaMatrisi);
     if (c < enIyiMaliyet - 1e-9) { enIyiMaliyet = c; enIyi = aday; }
   }
 
-  return sonuclandir(enIyi, m, duraklar, secenek, '2opt+oropt+ciftkopru');
+  /* Ölçüm GERÇEK matrisle — ceza yalnız aramaya aitti. */
+  const cikti = sonuclandir(enIyi, m, duraklar, secenek, '2opt+oropt+ciftkopru');
+  if (Array.isArray(secenek.grup)) {
+    /* Ceza olmasına rağmen bölünen mahalle varsa, orada kazanç bedelden
+       büyük demektir — sürücüye "hata değil, bilerek" diyebilmek için
+       çağırana bildiriliyor. */
+    cikti.bolunenGruplar = bolunenGruplar(cikti.sira, secenek.grup);
+  }
+  return cikti;
 }
 
 function sonuclandir(sira, m, duraklar, secenek, yontem) {
@@ -2053,7 +2149,8 @@ function sonuclandir(sira, m, duraklar, secenek, yontem) {
 
 module.exports = {
   sirala, kusUcusu, kusUcusuMatris, simetrikMi, maliyet,
-  enYakinKomsu, ikiOpt, orOpt, yerelIyilestir, ciftKopru, uretec, VARSAYILAN,
+  enYakinKomsu, ikiOpt, orOpt, yerelIyilestir, ciftKopru, uretec,
+  grupCezasi, bolunenGruplar, VARSAYILAN,
 };
 
   };
@@ -2620,6 +2717,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830215516',
+    surum: '20260830222223',
   };
 })(typeof self !== 'undefined' ? self : this);

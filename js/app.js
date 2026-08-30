@@ -356,8 +356,18 @@
       }
     }
 
-    const r = M.rota.sirala(baslangic, noktalar, matris ? { matris, birim } : {});
+    /* MAHALLEYİ BİR ARADA TUT.
+       Kullanıcının bildirdiği durum: "iki adres Yenişafak'ta ama araya
+       Adalet giriyor." Ölçüldü — sıralayıcı hata yapmıyor, kısa yol
+       gerçekten oradan geçiyor; ama mesafe modeli sahadaki park etme /
+       sokak bulma maliyetini görmüyor. Mahalle adı gruplama etiketi olarak
+       veriliyor; bedeli ve gerekçesi lib/rota.js VARSAYILAN.grupBedeliMetre
+       başlığında. */
+    const secenek = matris ? { matris, birim } : {};
+    secenek.grup = koordinatli.map((d) => d.mahalle || null);
+    const r = M.rota.sirala(baslangic, noktalar, secenek);
     await D.rotaKaydet(durum.gun, r.sira.map((i) => koordinatli[i].id), {
+      bolunenGruplar: r.bolunenGruplar || [],
       baslangicLat: baslangic.lat, baslangicLng: baslangic.lng,
       baslangicKaynak, baslangicDogruluk: baslangic.dogruluk || null,
       matrisKaynak: matris ? 'ors' : 'kusucusu',
@@ -621,10 +631,22 @@
               ${kacis(enYakin.mahalle || 'durak')} sonraya kaldı) — toplam yol böyle daha kısa çıkıyor.`;
           }
         }
+        /* MAHALLE BÖLÜNDÜYSE NEDENİNİ SÖYLE.
+           Sıralayıcı mahalleyi bir arada tutmayı zaten tercih ediyor (1 km
+           değerinde bir bedelle). Buna rağmen böldüyse, kazanç 1 km'den
+           fazla demektir — yani "yanlış yapmış" değil. Sürücü bunu bilmezse
+           hata sanıyor. */
+        const bolunen = (r.bolunenGruplar || []).filter(Boolean);
+        const bolunenNot = bolunen.length
+          ? `<br><b>${kacis(bolunen.join(', '))}</b> mahallesi rotada ikiye bölündü —
+             arada başka bir durak yol üstünde kaldığı için. Bir arada gitmek
+             1 km'den fazla uzatıyordu.`
+          : '';
+
         parca.push(`<div class="uyari bilgi">🧭 <div>
           Başlangıç: <b>bulunduğun konum</b>${r.baslangicDogruluk ? ` (±${Math.round(r.baslangicDogruluk)} m)` : ''}
           · ${r.matrisKaynak === 'ors' ? 'gerçek yol süresiyle' : 'kuş uçuşu tahminle'} sıralandı${yas != null && yas > 45 ? ` · ${yas} dk önce` : ''}.
-          ${yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : ''}${ilkNot}
+          ${yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : ''}${ilkNot}${bolunenNot}
         </div></div>`);
       }
     }
