@@ -1160,6 +1160,44 @@ function coz(kaynak, { ilce, mahalle, yol, kapino, bagiYokSay } = {}) {
      olduğunu bilmemenin cezasıydı. Belediye kaydı bunu söylüyorsa
      kalabalığın bir önemi kalmıyor: mahallede "13" numaradan 36 kapı olsa
      da bu sokağa kayıtlı olan belli. */
+  /* ══ KARDEŞ SOKAK TUZAĞI ══
+     Ölçülmüş gerçek durum: köylerde sokak adları "KÖY/NUMARA" biçiminde —
+     CUMAALANI/28, KARABAYIR/3, İMAMLAR/6… OCR son karakteri düşürdüğünde
+     ortaya ÇALIŞAN, GERÇEK bir başka sokak çıkıyor (CUMAALANI/2). Ad
+     tarafından bakınca hiçbir şey yanlış görünmüyor: eşleşme "tam".
+
+     Kapı↔sokak bağı burada tehlikeyi ARTIRIYOR: yanlış ama gerçek sokakta
+     o numaralı kapı da kayıtlı olduğu için motor 95 puanla yeşil yakıyor.
+     Ölçüldü (19 ilçe, son harf düşürülmüş): sessiz yanlış 208 → 309.
+
+     Bu yüzden: mahallede bu adın BİR KARAKTER UZUNU da gerçek bir sokaksa,
+     okuma şüpheli sayılıyor. Bedeli ölçüldü — kapıların yalnız %2,2'si
+     (Baklan'da %11,7, merkez ilçelerde %0,4). Yanlış eve gitmeye kıyasla
+     ucuz; sürücü sarı görüp bir kez bakıyor. */
+  const kardesVar = (() => {
+    if (y.eslesme !== 'tam' || !sonuc.yol) return false;
+    const bu = sade(y.yollar[0].ad_ara || y.yollar[0].ad);
+    if (!bu) return false;
+    /* Aranan kardeş: aynı ad + (boşluk) + 1-3 rakam.
+       Köy sokakları "KÖY/NUMARA" yazılıyor ve sade() eğik çizgiyi boşluğa
+       çeviriyor: "İMAMLAR/6" → "imamlar 6". Yani kardeş, addan bir değil
+       İKİ-ÜÇ karakter uzun oluyor. Sadece "tek karakter uzun" arasaydık
+       (ilk hâli öyleydi) bu örüntüyü kaçırırdık — ölçümde kaçırdı da. */
+    const desen = new RegExp('^' + bu.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' ?\\d{1,3}$');
+    const kardesOid = new Set();
+    for (const w of kaynak.yollar(mah.objectid)) {
+      if (desen.test(sade(w.adAra || w.ad))) kardesOid.add(w.oid);
+    }
+    if (!kardesOid.size) return false;
+    /* KARDEŞ VAR DİYE HEMEN ŞÜPHELENME — belirsizlik ancak AYNI KAPI
+       NUMARASI kardeş sokakta da varsa gerçek.
+       Ölçüldü: bu daraltma olmadan kural, doğrulanmış gerçek bir adresi
+       (Karaman / Yeşilköy Cd. No:281) sarıya düşürüyordu; Karaman'da
+       "YEŞİLKÖY <numara>" diye sokaklar var ama 281 onlarda yok, yani
+       ortada bir karışıklık ihtimali de yok. */
+    return k.kapilar.some((kp) => kp.yolOid != null && kardesOid.has(kp.yolOid));
+  })();
+
   if (bagliVar) {
     sonuc.bagliSokak = true;
     /* Puan sıfırdan kuruluyor — yukarıdaki mesafe temelli puanla
@@ -1182,6 +1220,14 @@ function coz(kaynak, { ilce, mahalle, yol, kapino, bagiYokSay } = {}) {
          Nadir ama olabiliyor; o zaman yine mesafe hakem. */
       bagliPuan -= 10;
       sonuc.notlar.push(`Bu sokakta "${en.kapino}" numaralı ${bagliKapilar.length} kayıt var — en yakını seçildi`);
+    }
+    if (kardesVar) {
+      /* Yeşile çıkmasın: bağ doğru olabilir ama YANLIŞ SOKAĞIN bağı olabilir. */
+      bagliPuan = Math.min(bagliPuan, ESIK.yesil - 3);
+      sonuc.kardesSokak = true;
+      sonuc.notlar.push(
+        `Bu mahallede "${sonuc.yol}" ile başlayan daha uzun bir sokak adı da var — ` +
+        'okumada bir karakter düşmüş olabilir, sokağı bir kontrol et');
     }
     sonuc.guven = Math.max(0, Math.min(100, Math.round(bagliPuan)));
     return son(sonuc);
@@ -1752,6 +1798,30 @@ function cozBelge(db, belge = {}) {
         sonuc.uyarilar.push(`Kapı numarası net okunamadı (%${Math.round(enIyi)}) — "${sonuc.kapino}" doğru mu, bir bak`);
         sonuc.ocrSupheli = true;
       }
+    }
+  }
+
+  /* SOKAK ADI NET OKUNAMADIYSA SONUÇ YEŞİL OLAMAZ.
+     Kapı numarası için zaten yapılıyordu; sokak için de gerekli olduğu
+     ölçümle çıktı. Kapı↔sokak bağı kurulduktan sonra motor, YANLIŞ okunmuş
+     ama gerçek olan bir sokakta kapıyı bulup 95 puan veriyor — çünkü veri
+     onu doğruluyor. Veri "bu okuma doğru mu" sorusuna cevap veremiyor;
+     buna yalnız OCR'ın kendi güveni cevap verebiliyor.
+     Gerçek örnek (köy adresleri): "CUMAALANI/28" → "CUMAALANI/2" okunuyor,
+     ikisi de gerçek sokak, sapma 223 m ve hiçbir uyarı yok. */
+  if (sonuc.yol && Array.isArray(belge.ocrKelimeler) && belge.ocrKelimeler.length) {
+    const parcalar = metin.sade(sonuc.yol).split(' ').filter((p) => p.length >= 2);
+    let enDusuk = null;
+    for (const p of parcalar) {
+      const ilgili = belge.ocrKelimeler.filter((k) => metin.sade(k.metin).includes(p));
+      if (!ilgili.length) continue;
+      const enIyi = Math.max(...ilgili.map((k) => k.guven));
+      if (enDusuk === null || enIyi < enDusuk) enDusuk = enIyi;
+    }
+    if (enDusuk !== null && enDusuk < 70 && sonuc.guven > adres.ESIK.sari) {
+      sonuc.guven = adres.ESIK.sari;
+      sonuc.uyarilar.push(`Sokak adı net okunamadı (%${Math.round(enDusuk)}) — "${sonuc.yol}" doğru mu, bir bak`);
+      sonuc.ocrSupheli = true;
     }
   }
 
@@ -2816,6 +2886,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830231325',
+    surum: '20260830234839',
   };
 })(typeof self !== 'undefined' ? self : this);

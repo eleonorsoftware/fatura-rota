@@ -24,8 +24,8 @@
  * ve eski önbellek siliniyor.
  */
 
-const KABUK_SURUM = '20260830231325';
-const VERI_SURUM = '20260830231325';
+const KABUK_SURUM = '20260830234839';
+const VERI_SURUM = '20260830234838';
 const KABUK = 'kabuk-' + KABUK_SURUM;
 const VERI = 'veri-' + VERI_SURUM;
 
