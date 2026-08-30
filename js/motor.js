@@ -298,11 +298,19 @@ function kapiNoAdaylari(metin) {
   let m;
   while ((m = re.exec(String(metin))) !== null) { ekle(m[1]); if (a.length >= 6) break; }
 
+  /* Buraya kadar bulunanlar AÇIKÇA "No:" ile işaretlenmiş olanlar. */
+  const acikSayi = a.length;
+
   /* e-İrsaliyelerin çoğunda "No:" HİÇ YOK; onun yerine "Apt: 14 D: 14" yazıyor.
-     Türkiye'de apartman numarası pratikte kapı numarasıdır — ama tahmin
-     olduğu için "No:" değerlerinden SONRA sıraya giriyor. */
+     Türkiye'de apartman numarası pratikte kapı numarasıdır, o yüzden aday
+     olarak deneniyor — ama TAHMİN olduğu için "No:" değerlerinden sonra
+     sıraya giriyor ve puanlamada onlara öncelik veriliyor (bkz. fatura.js).
+     Kural: "No:" varsa o kullanılır; yoksa "Apt:" kapı numarası sayılır. */
   const aptRe = /\b(?:apt|apartmani|apartman|bina|blok)\s*[:.]?\s*(\d{1,4}[a-zA-Z]?)/gi;
   while ((m = aptRe.exec(String(metin))) !== null) { ekle(m[1]); if (a.length >= 8) break; }
+
+  /* Hangilerinin açık "No:" olduğu çağırana bildiriliyor. */
+  a.acik = a.slice(0, acikSayi);
   return a;
 }
 
@@ -623,7 +631,7 @@ module.exports = {
  *    adresi kontrol etmesi gerektiğini bu sayı belirliyor.
  */
 
-const { sade } = require('./metin');
+const { sade, adiSadelestir } = require('./metin');
 
 /* VERİ ERİŞİMİ ARAYÜZ ARKASINDA.
    Bu dosya artık ne SQLite ne JSON biliyor; kendisine verilen `kaynak`
@@ -772,7 +780,16 @@ function mahalleBul(kaynak, mahalleAdi, ilceAdi) {
   const puanli = havuz.map((m) => ({ ...bicimle(m), p: benzerlik(m.adAra, ms) }))
                       .filter((m) => m.p >= 0.75)
                       .sort((a, b) => b.p - a.p);
-  return { adaylar: puanli.slice(0, 3), eslesme: puanli.length ? 'bulanik' : null };
+  if (puanli.length) return { adaylar: puanli.slice(0, 3), eslesme: 'bulanik' };
+
+  /* Yol aramasındaki gibi: elle yazılmış "Karaman Mh." gibi bir değerde
+     ek atılıp tekrar denenir. */
+  const eksiz = adiSadelestir(mahalleAdi);
+  if (eksiz && eksiz !== ms) {
+    const tekrar = mahalleBul(kaynak, eksiz, ilceAdi);
+    if (tekrar.adaylar.length) return { ...tekrar, ekAtildi: true };
+  }
+  return { adaylar: [], eslesme: null };
 }
 
 /**
@@ -813,6 +830,20 @@ function yolBul(kaynak, mahalleOid, yolAdi) {
     if (y.length) return { yollar: geometriEkle(y), eslesme: 'icerik' };
   }
 
+  /* ADRES EKİNİ ATIP TEKRAR DENE — bulanık aramalardan ÖNCE.
+     Sıra kritik: "2031/9. sk." için ek atılmadan devam edilirse aşağıdaki
+     ortak-sözcük eşleşmesi "2031" belirtecine takılıp aynı mahalledeki
+     "2031/1", "2031/2"… sokaklarının hepsini eşit puanla getiriyor ve
+     rastgele birini seçiyordu — sürücüyü yanlış sokağa gönderen sessiz bir
+     hata. Eki atınca "2031 9" TAM eşleşiyor ve iş bitiyor.
+     Ek atmak zarar vermiyor: gerçekten ekiyle kayıtlı yollar ("TOKİ YOLU")
+     yukarıdaki tam/önek aşamalarında zaten yakalanmış oluyor. */
+  const eksizYol = adiSadelestir(yolAdi);
+  if (eksizYol && eksizYol !== ys) {
+    const tekrar = yolBul(kaynak, mahalleOid, eksizYol);
+    if (tekrar.yollar.length) return { ...tekrar, ekAtildi: true };
+  }
+
   /* ORTAK SÖZCÜK EŞLEŞMESİ — harf harf benzerlikten önce denenir.
      Belediye kaydı KISALTMA kullanıyor, fatura ise açık yazıyor:
         veritabanı : "JAN.KO.TEĞ.ADEM BURAN"  -> "jan ko teg adem buran"
@@ -832,7 +863,15 @@ function yolBul(kaynak, mahalleOid, yolAdi) {
     /* En az 2 ayırt edici sözcük ortak olmalı, ya da tek sözcüklük bir
        sorguda o sözcük tam tutmalı. Tek ortak sözcükle eşleştirmek
        ("ADEM MENDERES" ile "ADNAN MENDERES") yanlış adrese götürür. */
-    const yeterli = ortakli.filter((r) => r.ortak >= 2 || (sorguKelime.length === 1 && r.oran === 1));
+    /* Tek belirteçle eşleşmeye izin verilirken SAYISAL belirteçler ayrı
+       tutuluyor: "2031" belirteci aynı mahalledeki 2031/1, 2031/2, 2031/9…
+       sokaklarının hepsinde var ve hepsi eşit puan alıp rastgele biri
+       seçiliyordu. Sayısal tek belirteçte adın TAMAMI tutmalı. */
+    const yeterli = ortakli.filter((r) => {
+      if (r.ortak >= 2) return true;
+      if (sorguKelime.length !== 1 || r.oran !== 1) return false;
+      return /[a-z]/.test(sorguKelime[0]) || r.adAra === ys;
+    });
     if (yeterli.length) {
       const enIyiOran = Math.max(...yeterli.map((r) => r.ortak));
       const kazanan = yeterli.filter((r) => r.ortak === enIyiOran);
@@ -842,10 +881,13 @@ function yolBul(kaynak, mahalleOid, yolAdi) {
 
   const puanli = adlar.map((r) => ({ ...r, p: benzerlik(r.adAra, ys) }))
                       .filter((r) => r.p >= 0.7);
-  if (!puanli.length) return { yollar: [], eslesme: null };
-  const enIyi = Math.max(...puanli.map((r) => r.p));
-  const kazanan = puanli.filter((r) => r.p === enIyi);
-  return { yollar: geometriEkle(kazanan), eslesme: 'bulanik', benzerlik: enIyi };
+  if (puanli.length) {
+    const enIyi = Math.max(...puanli.map((r) => r.p));
+    const kazanan = puanli.filter((r) => r.p === enIyi);
+    return { yollar: geometriEkle(kazanan), eslesme: 'bulanik', benzerlik: enIyi };
+  }
+
+  return { yollar: [], eslesme: null };
 }
 
 /**
@@ -1388,6 +1430,15 @@ function cozBelge(db, belge = {}) {
       for (const yol of adaylar.yol) {
         for (const kapino of adaylar.kapino) {
           const bilesen = { ilce: ilce.deger, mahalle: mahalle.deger, yol: yol.deger, kapino: kapino.deger };
+          /* "No:" AÇIKÇA YAZIYORSA "Apt:"tan ÖNCE GELİR.
+             Kullanıcının kuralı: kapı no yazan yeri doğal olarak kapı no say;
+             apartman numarasını ancak kapı no YOKSA kapı no yerine kullan.
+             Önceden ikisi de aday havuzundaydı ve hangisinin kazanacağı
+             puanlamanın tesadüfüne kalıyordu; artık açık olan küçük bir
+             öncelik puanı alıyor. */
+          const acikKapiNo = Object.values(kaynaklar).some((k) =>
+            k && Array.isArray(k.kapinoAdaylar) && Array.isArray(k.kapinoAdaylar.acik) &&
+            kapino.deger != null && k.kapinoAdaylar.acik.includes(kapino.deger));
           /* MAĞAZANIN KENDİ ADRESİNİ TESLİMAT SANMA.
              Tam sayfa okutulduğunda belgenin başlığındaki Media Markt adresi
              de metne giriyor ve Denizli'de gerçek bir adres olduğu için
@@ -1395,6 +1446,9 @@ function cozBelge(db, belge = {}) {
              gönderirdi. */
           if (metin.gondericiAdresiMi(bilesen.mahalle, bilesen.yol)) continue;
           const c = adres.coz(db, bilesen);
+          /* Öncelik puanı yalnız SIRALAMA için; sonuçtaki güven değeri
+             değişmiyor, yoksa kullanıcıya olduğundan emin görünürdü. */
+          c.siraPuani = c.guven + (acikKapiNo && c.keskinlik === 'kapi' ? 6 : 0);
           const kayit = {
             guven: c.guven, keskinlik: c.keskinlik,
             kaynak: { ilce: ilce.kaynak, mahalle: mahalle.kaynak, yol: yol.kaynak, kapino: kapino.kaynak },
@@ -1406,8 +1460,9 @@ function cozBelge(db, belge = {}) {
              "no: 281" aynı puanı aldı (ikisi de sokağa yakın) ve sıralamada
              önce gelen etiket kazandı — ama doğrusu 281'di. Kapının sokak
              çizgisine uzaklığı burada tarafsız hakem: 281 → 11 m, 7 → 21 m. */
-          if (!enIyi || c.guven > enIyi.guven ||
-              (c.guven === enIyi.guven && c.keskinlik === 'kapi' && enIyi.cozum.keskinlik === 'kapi' &&
+          const oncekiPuan = enIyi ? (enIyi.cozum.siraPuani ?? enIyi.guven) : -1;
+          if (!enIyi || c.siraPuani > oncekiPuan ||
+              (c.siraPuani === oncekiPuan && c.keskinlik === 'kapi' && enIyi.cozum.keskinlik === 'kapi' &&
                c.yolaUzaklik != null && enIyi.cozum.yolaUzaklik != null &&
                c.yolaUzaklik < enIyi.cozum.yolaUzaklik)) enIyi = kayit;
         }
@@ -1895,6 +1950,6 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
     fatura: require('./fatura'),
     rota: require('./rota'),
     ors: require('./ors'),
-    surum: '20260830192405',
+    surum: '20260830193435',
   };
 })(typeof self !== 'undefined' ? self : this);
