@@ -8,14 +8,26 @@
  * İKİ FARKLI STRATEJİ
  * -------------------
  * - KABUK (html/css/js): önce ağ, olmazsa önbellek. Güncelleme anında gelsin.
- * - ADRES VERİSİ (veri/*.json): önce önbellek. Bu dosyalar değişmiyor,
- *   her açılışta 7 MB indirmenin anlamı yok. Belediye verisi tazelendiğinde
- *   SURUM değiştirilip yeni önbellek oluşturuluyor.
+ * - ADRES VERİSİ (veri/*.json): önce önbellek. Her açılışta 8 MB indirmenin
+ *   anlamı yok.
+ *
+ * ⚠️ İKİ AYRI SÜRÜM SABİTİ VAR VE İKİSİ DE DERLEME SIRASINDA YAZILIYOR
+ * (veri/web-derle.js). Elle dokunmayın.
+ *
+ * Neden ayrı: kabuk her yayında değişiyor, veri nadiren. Tek sabit
+ * kullanılsaydı ya güncelleme gelmezdi ya da sürücü her yayında 8 MB
+ * indirirdi.
+ *
+ * Bu ayrım bir hatadan doğdu: kapı↔sokak bağı sunucuya çıktı ama telefon
+ * eski adres verisini önbellekten vermeye devam etti — düzeltilen veri
+ * kullanıcıya hiç ulaşmadı. Veri damgası artık paket üretilince değişiyor
+ * ve eski önbellek siliniyor.
  */
 
-const SURUM = 'rota-v1';
-const KABUK = 'kabuk-' + SURUM;
-const VERI = 'veri-' + SURUM;
+const KABUK_SURUM = '20260830231325';
+const VERI_SURUM = '20260830231325';
+const KABUK = 'kabuk-' + KABUK_SURUM;
+const VERI = 'veri-' + VERI_SURUM;
 
 /* Sürüm damgalı adresler (js/app.js?s=…) burada listelenmiyor: her yayında
    değişiyorlar ve eski liste 404 üretirdi. Kurulumda yalnız sabit adresler
