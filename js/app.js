@@ -104,20 +104,43 @@
     if (!IOS || ANA_EKRANDA) return;
     try { if (localStorage.getItem('kurulumIpucuKapandi')) return; } catch (_) {}
 
+    /* Chrome/Firefox/Edge iOS'ta "Ana Ekrana Ekle" YOKTUR — Apple bu özelliği
+       yalnız Safari'ye veriyor. Kullanıcı Chrome'un üç nokta menüsünde arayıp
+       bulamıyor (sahada tam olarak bu yaşandı). O yüzden önce hangi tarayıcıda
+       olduğu tespit edilip ona göre yönlendiriliyor. */
     const safariMi = !/CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
     const k = document.createElement('div');
     k.className = 'uyari';
     k.style.cssText = 'margin:0 0 10px;display:block;background:#dbeafe;color:#1e40af';
     k.innerHTML = safariMi
-      ? '<b>📲 Ana ekrana ekle</b><br>Alttaki <b>Paylaş</b> düğmesine bas → listeyi ' +
-        '<b>aşağı kaydır</b> → <b>Ana Ekrana Ekle</b>. (Menünün altlarında, kaydırmadan görünmez.)' +
+      ? '<b>📲 Ana ekrana ekle</b><br>Alttaki <b>Paylaş</b> düğmesine bas ' +
+        '(kutudan yukarı çıkan ok) → listeyi <b>aşağı kaydır</b> → ' +
+        '<b>Ana Ekrana Ekle</b>. Menünün altlarındadır, kaydırmadan görünmez.' +
         '<br><button class="dugme kucuk" data-ipucu-kapat="1" style="margin-top:8px">Anladım</button>'
-      : '<b>📲 Safari ile aç</b><br>Ana ekrana ekleme yalnız <b>Safari</b>\'de var. ' +
-        'Bu adresi Safari\'de açıp Paylaş → Ana Ekrana Ekle yap.' +
-        '<br><button class="dugme kucuk" data-ipucu-kapat="1" style="margin-top:8px">Anladım</button>';
+      : '<b>⚠️ Şu an Chrome kullanıyorsun</b><br>iPhone\'da "Ana Ekrana Ekle" ' +
+        '<b>yalnız Safari\'de</b> var — Chrome\'un menüsünde yoktur, arama.' +
+        '<br>Adresi kopyala, <b>Safari</b>\'de aç, sonra Paylaş → Ana Ekrana Ekle.' +
+        '<div class="dugme-sirasi" style="margin-top:8px">' +
+        '<button class="dugme kucuk birincil" data-adres-kopyala="1">Adresi Kopyala</button>' +
+        '<button class="dugme kucuk" data-ipucu-kapat="1">Kapat</button></div>';
     k.querySelector('[data-ipucu-kapat]').addEventListener('click', () => {
       try { localStorage.setItem('kurulumIpucuKapandi', '1'); } catch (_) {}
       k.remove();
+    });
+    const kopyala = k.querySelector('[data-adres-kopyala]');
+    if (kopyala) kopyala.addEventListener('click', async () => {
+      const adres = location.origin + location.pathname;
+      try {
+        await navigator.clipboard.writeText(adres);
+        kopyala.textContent = '✓ Kopyalandı';
+      } catch (_) {
+        /* Panoya erişim engellenirse adresi seçilebilir biçimde göster. */
+        const g = document.createElement('input');
+        g.value = adres;
+        g.style.cssText = 'width:100%;margin-top:8px;padding:10px;border:1px solid #93c5fd;border-radius:8px;font-size:14px';
+        k.appendChild(g);
+        g.select();
+      }
     });
     const hedef = $('#sayfa-bugun');
     if (hedef) hedef.insertBefore(k, hedef.firstChild);
