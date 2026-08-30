@@ -333,6 +333,27 @@ function kapiNoAdaylari(metin) {
   const aptRe = /\b(?:apt|apartmani|apartman|bina|blok)\s*[:.]?\s*(\d{1,4}[a-zA-Z]?)/gi;
   while ((m = aptRe.exec(String(metin))) !== null) { ekle(m[1]); if (a.length >= 8) break; }
 
+  /* "N:1" — kısaltılmış numara işareti. İki nokta ZORUNLU tutuluyor:
+     "N" tek başına metinde her yerde geçiyor, ":" onu belirteç yapıyor. */
+  const nRe = /\bn\s*[:.]\s*(\d{1,4}[a-zA-Z]?)\b/gi;
+  while ((m = nRe.exec(String(metin))) !== null) { ekle(m[1]); if (a.length >= 8) break; }
+
+  /* YOL EKİNDEN HEMEN SONRA GELEN ÇIPLAK SAYI.
+     Gerçek belge: "ÇAKMAK MAH 134/1 SOK 9 DAİRE 6" — hiç "No:" yok, kapı
+     numarası sokağın hemen ardında. Bu biçim yakalanmadığı için kapı
+     numarası tamamen düşüyordu.
+     Yol ekinden ÖNCEKİ sayı alınmıyor: orası sokağın kendi adı ("134/1 SOK").
+     Ardından bir ek daha geliyorsa (no/apt/daire) o kendi kuralıyla
+     yakalanacağı için burada atlanıyor. */
+  const cipRe = /\b(?:sokak|sokagi|sok|sk|caddesi|cadde|cad|cd|bulvari|bulvar|blv|bul)\s*[.:]?\s*(\d{1,4}[a-zA-Z]?)(?=\s|$|,)/gi;
+  while ((m = cipRe.exec(String(metin))) !== null) {
+    /* Sayının ardından "sokak/cadde" geliyorsa o sayı yol adının parçası. */
+    const kalan = String(metin).slice(m.index + m[0].length, m.index + m[0].length + 12);
+    if (/^\s*(?:sok|sk|cad|cd|blv|bul)/i.test(kalan)) continue;
+    ekle(m[1]);
+    if (a.length >= 10) break;
+  }
+
   /* Hangilerinin açık "No:" olduğu çağırana bildiriliyor. */
   a.acik = a.slice(0, acikSayi);
   return a;
@@ -395,7 +416,7 @@ function adaylarUret(kelimeler, ekIndeks, enFazla, solSinir) {
  * kendi adresi ("TERAS PARK AVM 55. SOKAK"). İlk bulduğunda dursaydık
  * müşterinin sokağını hiç görmezdik.
  */
-function yolAdaylari(sadeAyrik) {
+function yolAdaylari(sadeAyrik, ham) {
   const kelimeler = sadeAyrik.split(' ');
   const solSinir = new Set([...EK.mahalle, ...EK.bina, ...EK.numara, ...GURULTU]);
   const hepsi = [];
@@ -408,7 +429,49 @@ function yolAdaylari(sadeAyrik) {
     }
     if (hepsi.length >= 12) break;          // kombinasyon patlamasın
   }
-  return hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik);
+  return egikSayiliDuzelt(hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik), ham);
+}
+
+/**
+ * EĞİK ÇİZGİLİ NUMARALI SOKAKLAR — "1490/1"
+ * =========================================
+ *
+ * Denizli'de aynı numaranın birden çok kolu var: Karaman mahallesinde
+ * 1490, 1490/1, 1490/2, 1490/3, 1490/4, 1490/5 diye ALTI AYRI SOKAK.
+ * Bunlar birbirinden yüzlerce metre uzakta olabiliyor.
+ *
+ * sade() eğik çizgiyi boşluğa çeviriyor (veritabanındaki ad da aynı işlemden
+ * geçtiği için eşleşme buna göre kuruluyor): "1490/1" → "1490 1". Ama bu,
+ * aday üreticinin gözünde İKİ SÖZCÜK. Ölçülen sonuç:
+ *
+ *   "1490/1 SOKAK"  → adaylar: ["1", "1490 1"]        → "1" kazanıyordu
+ *   "1490/1 Apt:12" → adaylar: ["1490 1", "1490"]     → "1490" kazanıyordu
+ *
+ * İkisi de gerçek sokak olduğu için gazetteer itiraz etmiyor; sürücü emin
+ * adımlarla yanlış sokağa gidiyor ve kapı numarası orada bulunmadığı için
+ * kapı da düşüyor. Kullanıcının bildirdiği "1490/1'i algılamıyor, o yüzden
+ * kapı numarasını da algılamıyor" tam olarak budur.
+ *
+ * Çözüm: belgede "1490/1" yazıyorsa parçaları ("1490" ve "1") aday
+ * listesinden ÇIKAR ve tam hâli başa al. Belge daha özgül bir ad yazmış;
+ * onu genelleştirmek bilgi kaybı.
+ */
+function egikSayiliDuzelt(adaylar, ham) {
+  if (!ham || !adaylar.length) return adaylar;
+  const ciftler = [];
+  const re = /(\d{1,5})\s*\/\s*(\d{1,4})/g;
+  let m;
+  while ((m = re.exec(String(ham))) !== null) ciftler.push([m[1], m[2]]);
+  if (!ciftler.length) return adaylar;
+
+  let sonuc = adaylar.slice();
+  for (const [x, y] of ciftler) {
+    const tam = x + ' ' + y;
+    if (!sonuc.includes(tam)) continue;      // tam hâli aday değilse dokunma
+    sonuc = sonuc.filter((a) => a !== x && a !== y);
+    sonuc = [tam, ...sonuc.filter((a) => a !== tam)];
+  }
+  return sonuc;
 }
 
 /**
@@ -475,7 +538,7 @@ function ayiklaSerbest(metin, ilceAdlari) {
   if (!metin) return {};
   const ayrik = ayirEkler(sade(metin));
   const mAday = mahalleAdaylari(ayrik);
-  const yAday = yolAdaylari(ayrik);
+  const yAday = yolAdaylari(ayrik, metin);
   return {
     ilce: ilceBul(metin, ilceAdlari),
     mahalle: mAday[0] || null, mahalleAdaylar: mAday,
@@ -497,7 +560,7 @@ function ayiklaSerbest(metin, ilceAdlari) {
  */
 function ayiklaEtiket({ ilIlce, semtMahalle, acikAdres } = {}, ilceAdlari) {
   const adresAyrik = ayirEkler(sade(acikAdres || ''));
-  const yAday = yolAdaylari(adresAyrik);
+  const yAday = yolAdaylari(adresAyrik, acikAdres);
   const yEksiz = yolAdiTahmin(adresAyrik);
   return {
     ilce: ilceBul(ilIlce, ilceAdlari),
@@ -1372,6 +1435,7 @@ module.exports = { olustur, dosyadanOkuyucu, agdanOkuyucu, OLCEK };
 
 const metin = require('./metin');
 const adres = require('./adres');
+const bolge = require('./bolge');
 
 /**
  * @param {object} db            adres.ac() ile açılmış veritabanı
@@ -1384,8 +1448,31 @@ const adres = require('./adres');
 function cozBelge(db, belge = {}) {
   const ilceler = adres.ilceAdlari(db);
 
-  /* Her kaynağı kendi biçimine uygun ayrıştır. */
+  /* Her kaynağı kendi biçimine uygun ayrıştır.
+     EKLEME SIRASI ÖNEMLİ: aynı değer birden çok kaynakta geçerse ilk ekleyen
+     sahiplenir ve o kaynağın puanını alır. Teslimat bloğu en başta. */
   const kaynaklar = {};
+
+  /* TESLİMAT ADRESİ ≠ FATURA ADRESİ — ölçülmüş yanlış-adres tuzağı.
+     Satış belgesinde ikisi yan yana basılıyor ve sık sık farklı oluyor
+     (fatura kurumsal merkeze, teslimat eve). OCR sütunları tek satırda
+     birleştirdiği için düz metinden ayrılamıyorlar; sözcük kutularıyla
+     ayrılıyorlar. Gerçek örnek:
+        Fatura adresi: 3. SANAYİ SİTESİ 52 SOK 34   (Denizli merkez)
+        Teslimat adresi: ÇAKMAK MAH 134/1 SOK 9 DAİRE 6
+     Ayrım yapılmazsa motor emin adımlarla yanlış eve gönderiyordu. */
+  const kutulu = Array.isArray(belge.ocrKelimeler) &&
+    belge.ocrKelimeler.some((k) => k && Number.isFinite(k.x0)) ? belge.ocrKelimeler : null;
+  let teslimatBlogu = null;
+  if (kutulu) {
+    teslimatBlogu = bolge.bolumMetni(kutulu, bolge.TESLIMAT_DESENLERI, { sag: 0.45, yayilma: 10 });
+    if (teslimatBlogu) {
+      kaynaklar.teslimat = metin.ayiklaSerbest(teslimatBlogu, ilceler);
+      const faturaBlogu = bolge.bolumMetni(kutulu, bolge.FATURA_DESENLERI, { sag: 0.32, yayilma: 9 });
+      if (faturaBlogu) kaynaklar.faturaAdresi = metin.ayiklaSerbest(faturaBlogu, ilceler);
+    }
+  }
+
   if (belge.etiket) kaynaklar.etiket = metin.ayiklaEtiket(belge.etiket, ilceler);
   if (belge.govde) kaynaklar.govde = metin.ayiklaSerbest(belge.govde, ilceler);
   if (belge.elYazisi) kaynaklar.elYazisi = metin.ayiklaSerbest(belge.elYazisi, ilceler);
@@ -1473,6 +1560,15 @@ function cozBelge(db, belge = {}) {
           /* Öncelik puanı yalnız SIRALAMA için; sonuçtaki güven değeri
              değişmiyor, yoksa kullanıcıya olduğundan emin görünürdü. */
           c.siraPuani = c.guven + (acikKapiNo && c.keskinlik === 'kapi' ? 6 : 0);
+          /* Belgede "Teslimat adresi" ayrı yazılmışsa oradan gelen bileşen
+             kazanır; yalnız "Fatura adresi" bloğunda geçen bileşen kaybeder.
+             Puan farkı, ikisi de gerçek adres olduğunda (ki genelde öyle)
+             belirleyici olacak kadar büyük tutuldu. */
+          if (kaynaklar.teslimat) {
+            const kaynakSeti = [mahalle.kaynak, yol.kaynak, kapino.kaynak];
+            if (kaynakSeti.includes('teslimat')) c.siraPuani += 14;
+            if (kaynakSeti.includes('faturaAdresi')) c.siraPuani -= 14;
+          }
           const kayit = {
             guven: c.guven, keskinlik: c.keskinlik,
             kaynak: { ilce: ilce.kaynak, mahalle: mahalle.kaynak, yol: yol.kaynak, kapino: kapino.kaynak },
@@ -1513,6 +1609,22 @@ function cozBelge(db, belge = {}) {
     sonuc.uyarilar.unshift('Belgede el yazısıyla adres var — basılı adresle karşılaştır');
     sonuc.elYazisiVar = true;
     if (sonuc.guven > adres.ESIK.sari) sonuc.guven = adres.ESIK.sari;   // en fazla "sarı"
+  }
+
+  /* BELGEDE AYRI BİR TESLİMAT ADRESİ VARSA VE ÇÖZÜLEMEDİYSE SUSMA.
+     Gerçek belge (fotoğraf 45): fatura adresi Honaz'daki organize sanayide
+     bir fabrika, teslimat adresi ise Pamukkale'de bir ev. Teslimat satırında
+     mahalle yazmadığı için çözülemiyor ve motor fatura adresini seçiyor —
+     sürücüyü 25 km öteye, fabrikaya gönderirdi. Üstelik fatura adresi gerçek
+     bir adres olduğu için güven puanı da yüksek çıkıyor; hata sessiz kalıyor.
+     Bu yüzden: teslimat bloğu VAR ama seçilen çözümün hiçbir parçası oradan
+     GELMİYORSA sonuç yeşil olamaz ve sürücüye açıkça söylenir. */
+  if (kaynaklar.teslimat && !Object.values(sonuc.kaynak || {}).includes('teslimat')) {
+    sonuc.uyarilar.unshift(
+      'Belgede ayrı bir TESLİMAT ADRESİ yazıyor ama okunamadı — aşağıdaki adres ' +
+      'fatura adresi olabilir. Belgeye bakıp doğrula.');
+    sonuc.teslimatOkunamadi = true;
+    if (sonuc.guven > adres.ESIK.sari) sonuc.guven = adres.ESIK.sari;
   }
 
   /* Etiket ile gövde sokak/kapı konusunda çelişiyorsa sürücü bilsin. */
@@ -1674,28 +1786,51 @@ function maliyet(sira, m) {
   return t;
 }
 
-/** 1. aşama — en yakın komşu. Başlangıç her zaman 0 indeksli düğüm. */
-function enYakinKomsu(m) {
+/**
+ * 1. aşama — en yakın komşu. Başlangıç her zaman 0 indeksli düğüm.
+ *
+ * @param {number} [ilkAtla=0] ilk adımda en yakın yerine (ilkAtla+1). en
+ *        yakını seç. Farklı tohumlar üretip yerel en iyiden kaçmak için.
+ */
+function enYakinKomsu(m, ilkAtla = 0) {
   const n = m.length;
   const gidildi = new Uint8Array(n);
   const sira = [0];
   gidildi[0] = 1;
   let simdi = 0;
   for (let adim = 1; adim < n; adim++) {
-    let enIyi = -1, enKisa = Infinity;
-    for (let j = 1; j < n; j++) {
-      if (gidildi[j]) continue;
-      if (m[simdi][j] < enKisa) { enKisa = m[simdi][j]; enIyi = j; }
-    }
-    sira.push(enIyi); gidildi[enIyi] = 1; simdi = enIyi;
+    const kalan = [];
+    for (let j = 1; j < n; j++) if (!gidildi[j]) kalan.push(j);
+    kalan.sort((p, q) => m[simdi][p] - m[simdi][q]);
+    const secim = kalan[adim === 1 ? Math.min(ilkAtla, kalan.length - 1) : 0];
+    sira.push(secim); gidildi[secim] = 1; simdi = secim;
   }
   return sira;
 }
 
 /**
  * 2-opt — iki kenarı kesip aradaki parçayı TERS ÇEVİRİR.
- * Yalnız simetrik matriste doğrudur (bkz. dosya başındaki asimetri uyarısı).
  * Başlangıç düğümü (indeks 0) sabit kalır.
+ *
+ * ⚠️ BU FONKSİYON BİR KEZ YANLIŞ YAZILDI VE ROTAYI BOZDU — nedeni burada:
+ *
+ * Önceki hâli parçayı ters çevirmenin maliyetini yalnız İKİ UÇ KENARDAN
+ * hesaplıyordu (m[a][b] + m[c][e] → m[a][c] + m[b][e]). Bu, matris
+ * SİMETRİKSE doğrudur: ters çevrilen parçanın içindeki kenarlar aynı
+ * maliyette kalır. Gerçek yol süreleri ise ASİMETRİKTİR (tek yönler,
+ * dönüş yasakları): A→B ile B→A farklıdır ve parçanın içi de değişir.
+ *
+ * O yüzden 2-opt, gerçek yol matrisi kullanıldığında TAMAMEN KAPATILIYORDU.
+ * Geriye yalnız en-yakın-komşu + Or-opt kalıyordu ve ortaya çıkan rota
+ * kullanıcının bildirdiği hâle geliyordu: aynı mahalledeki iki teslimatın
+ * arasına 10 kilometrelik bir sıçrama giriyor, çünkü hiçbir adım o çaprazı
+ * çözemiyor — çaprazları çözen tam olarak 2-opt'tur.
+ *
+ * Doğrusu: parçanın İÇİNİ de hesaba katmak. Ters çevrilmiş parçanın iç
+ * maliyeti, aynı kenarların ters yönde toplamıdır; O(parça uzunluğu) ek iş.
+ * Toplam maliyet O(n³) oluyor — 60 durak için milisaniyeler. Bu hâliyle
+ * simetrik matriste de doğru çalışıyor (ileri = geri çıkıyor), yani artık
+ * tek bir 2-opt var ve HER ZAMAN açık.
  */
 function ikiOpt(sira, m) {
   const n = sira.length;
@@ -1706,9 +1841,15 @@ function ikiOpt(sira, m) {
       for (let j = i + 1; j < n; j++) {
         const a = sira[i - 1], b = sira[i], c = sira[j];
         const e = j + 1 < n ? sira[j + 1] : -1;
+        /* Parçanın içi: ileri ve geri yöndeki toplamlar. */
+        let ileri = 0, geri = 0;
+        for (let k = i; k < j; k++) {
+          ileri += m[sira[k]][sira[k + 1]];
+          geri += m[sira[k + 1]][sira[k]];
+        }
         /* Son düğümden sonrası olmadığı için o kenar hesaba katılmaz. */
-        const once = m[a][b] + (e >= 0 ? m[c][e] : 0);
-        const sonra = m[a][c] + (e >= 0 ? m[b][e] : 0);
+        const once = m[a][b] + ileri + (e >= 0 ? m[c][e] : 0);
+        const sonra = m[a][c] + geri + (e >= 0 ? m[b][e] : 0);
         if (sonra < once - 1e-9) {
           let l = i, r = j;
           while (l < r) { const t = sira[l]; sira[l] = sira[r]; sira[r] = t; l++; r--; }
@@ -1721,32 +1862,85 @@ function ikiOpt(sira, m) {
 }
 
 /**
- * Or-opt — 1-3 duraklık bir parçayı olduğu gibi (yönünü bozmadan) başka bir
- * yere taşır. Asimetrik matriste de doğrudur, o yüzden tek başına da
- * kullanılabiliyor.
+ * Or-opt — 1-3 duraklık bir parçayı başka bir yere taşır.
+ * Parça hem olduğu gibi hem TERS çevrilmiş olarak deneniyor; ters çevirmek
+ * asimetrik matriste de doğru hesaplanıyor çünkü maliyet baştan sona
+ * yeniden ölçülüyor.
  */
 function orOpt(sira, m, enFazlaParca = 3) {
   const n = sira.length;
   let iyilesti = true;
   while (iyilesti) {
     iyilesti = false;
-    for (let uzunluk = 1; uzunluk <= enFazlaParca; uzunluk++) {
-      for (let i = 1; i + uzunluk <= n; i++) {
+    for (let uzunluk = 1; uzunluk <= enFazlaParca && !iyilesti; uzunluk++) {
+      for (let i = 1; i + uzunluk <= n && !iyilesti; i++) {
         const parca = sira.slice(i, i + uzunluk);
+        const tersParca = parca.slice().reverse();
         const kalan = sira.slice(0, i).concat(sira.slice(i + uzunluk));
         const simdikiMaliyet = maliyet(sira, m);
-        for (let k = 1; k <= kalan.length; k++) {
-          if (k === i) continue;                       // aynı yere koymak anlamsız
-          const aday = kalan.slice(0, k).concat(parca, kalan.slice(k));
-          if (maliyet(aday, m) < simdikiMaliyet - 1e-9) {
-            sira.length = 0; sira.push(...aday);
-            iyilesti = true; break;
+        for (let k = 1; k <= kalan.length && !iyilesti; k++) {
+          for (const p of (uzunluk > 1 ? [parca, tersParca] : [parca])) {
+            if (k === i && p === parca) continue;       // aynı yere aynı yönde koymak anlamsız
+            const aday = kalan.slice(0, k).concat(p, kalan.slice(k));
+            if (maliyet(aday, m) < simdikiMaliyet - 1e-9) {
+              sira.length = 0; sira.push(...aday);
+              iyilesti = true; break;
+            }
           }
         }
-        if (iyilesti) break;
       }
-      if (iyilesti) break;
     }
+  }
+  return sira;
+}
+
+/* --------------------------------------------- yerel en iyiden kaçış */
+
+/**
+ * Sıralı rastgele sayı üreteci (xorshift32).
+ *
+ * Math.random KULLANILMIYOR: aynı duraklar aynı sırayı vermeli. Sürücü
+ * "rotayı çıkar"a iki kez basınca farklı iki rota görürse hangisine
+ * güveneceğini bilemez; ayrıca testler yeniden üretilebilir olmaz.
+ */
+function uretec(tohum) {
+  let x = (tohum | 0) || 2463534242;
+  return () => {
+    x ^= x << 13; x |= 0;
+    x ^= x >>> 17;
+    x ^= x << 5; x |= 0;
+    return ((x >>> 0) % 1000000) / 1000000;
+  };
+}
+
+/**
+ * ÇİFT KÖPRÜ — rotayı dört parçaya bölüp ortadaki ikisinin yerini değiştirir.
+ *
+ * 2-opt ve Or-opt'un ikisi de "yerel" adımlar: iyileştiremeyecekleri bir
+ * noktaya gelince dururlar, ama o nokta en iyi rota olmak zorunda değil.
+ * Çift köprü, hiçbir 2-opt adımının tek başına yapamayacağı bir karıştırma
+ * uyguluyor; ardından yerel iyileştirme tekrar çalışıyor. Daha iyi çıkarsa
+ * saklanıyor, çıkmazsa atılıyor. Böylece sonuç ASLA kötüleşmiyor.
+ */
+function ciftKopru(sira, rast) {
+  const n = sira.length;
+  if (n < 8) return sira.slice();
+  const kesim = [1 + Math.floor(rast() * (n - 3)), 0, 0];
+  kesim[1] = kesim[0] + 1 + Math.floor(rast() * (n - kesim[0] - 2));
+  kesim[2] = kesim[1] + 1 + Math.floor(rast() * (n - kesim[1] - 1));
+  const [p, q, r] = kesim;
+  return sira.slice(0, p).concat(sira.slice(q, r), sira.slice(p, q), sira.slice(r));
+}
+
+/** Yerel iyileştirme: 2-opt ve Or-opt sırayla, artık iyileşme kalmayana dek. */
+function yerelIyilestir(sira, m) {
+  let onceki = Infinity;
+  for (let tur = 0; tur < 6; tur++) {
+    sira = ikiOpt(sira, m);
+    sira = orOpt(sira, m);
+    const c = maliyet(sira, m);
+    if (c >= onceki - 1e-9) break;
+    onceki = c;
   }
   return sira;
 }
@@ -1779,13 +1973,46 @@ function sirala(baslangic, duraklar, secenek = {}) {
     throw new Error(`Matris boyutu ${m.length}, beklenen ${N + 1} (başlangıç + ${N} durak)`);
   }
 
-  let sira = enYakinKomsu(m);
-  const simetrik = secenek.matris ? simetrikMi(m) : true;
-  if (simetrik) sira = ikiOpt(sira, m);
-  sira = orOpt(sira, m);
-  if (simetrik) sira = ikiOpt(sira, m);     // taşımadan sonra bir tur daha
+  /* BİRDEN ÇOK BAŞLANGIÇ.
+     En yakın komşu kısa görüşlü: ilk adımda en yakına gitmek, sonraki
+     adımları çıkmaza sokabiliyor. Bu yüzden "en yakın komşu" ile birlikte
+     "ilk durak olarak 2., 3., 4. en yakını seç" varyantları da deneniyor;
+     hepsi yerel iyileştirmeden geçip en iyisi alınıyor. Ucuz ve tek
+     başlangıcın sistematik körlüğünü kırıyor. */
+  const tohumlar = [enYakinKomsu(m)];
+  for (let k = 1; k <= Math.min(3, N - 1); k++) tohumlar.push(enYakinKomsu(m, k));
 
-  return sonuclandir(sira, m, duraklar, secenek, simetrik ? '2opt+oropt' : 'oropt');
+  let enIyi = null, enIyiMaliyet = Infinity;
+  for (const t of tohumlar) {
+    const s = yerelIyilestir(t.slice(), m);
+    const c = maliyet(s, m);
+    if (c < enIyiMaliyet) { enIyiMaliyet = c; enIyi = s; }
+  }
+
+  /* ÇİFT KÖPRÜ TURLARI — yerel en iyiden kaçış.
+     Durak sayısıyla ölçekleniyor; 12 durakta ~34 tur, 60 durakta 120 tur.
+     Her tur birkaç milisaniye; kullanıcı farkı hissetmiyor ama rota
+     gözle görülür biçimde düzeliyor (ölçüm: test/rota.test.js). */
+  const turSayisi = secenek.turSayisi != null ? secenek.turSayisi
+    : Math.min(120, 10 + N * 2);
+  /* SÜRE TAVANI — telefonda düğmeye basınca beklenen süre.
+     Yerel iyileştirme O(n³); 80 durakta tur başına ~40 ms ediyor ve 120 tur
+     masaüstünde 4,5 sn sürüyordu. Telefonda bu kabul edilemez. Tur sayısı
+     değil GEÇEN SÜRE sınırlanıyor: küçük günlerde turların hepsi çalışıyor,
+     büyük günlerde elde olan en iyi rotayla yetiniliyor (sonuç asla
+     kötüleşmiyor, yalnız arama kısalıyor). */
+  const sureTavani = secenek.sureTavani != null ? secenek.sureTavani : 1200;
+  const baslangicAn = Date.now();
+  const rast = uretec(N * 7919 + Math.round((m[0][1] || 1) * 1000));
+  let tur = 0;
+  for (; tur < turSayisi; tur++) {
+    if (Date.now() - baslangicAn > sureTavani) break;
+    const aday = yerelIyilestir(ciftKopru(enIyi, rast), m);
+    const c = maliyet(aday, m);
+    if (c < enIyiMaliyet - 1e-9) { enIyiMaliyet = c; enIyi = aday; }
+  }
+
+  return sonuclandir(enIyi, m, duraklar, secenek, '2opt+oropt+ciftkopru');
 }
 
 function sonuclandir(sira, m, duraklar, secenek, yontem) {
@@ -1819,7 +2046,7 @@ function sonuclandir(sira, m, duraklar, secenek, yontem) {
 
 module.exports = {
   sirala, kusUcusu, kusUcusuMatris, simetrikMi, maliyet,
-  enYakinKomsu, ikiOpt, orOpt, VARSAYILAN,
+  enYakinKomsu, ikiOpt, orOpt, yerelIyilestir, ciftKopru, uretec, VARSAYILAN,
 };
 
   };
@@ -1967,6 +2194,417 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
 
   };
 
+  kayit['./bolge'] = function (module, exports, require) {
+'use strict';
+/**
+ * BÖLGE — ADRES SAYFANIN NERESİNDE?
+ * =================================
+ *
+ * NEDEN GEREKLİ
+ * -------------
+ * Bir e-İrsaliye A4 sayfasında müşteri adresi TEK bir 7 puntoluk satır.
+ * Sayfanın tamamı 2480 piksel genişliğe getirildiğinde o satırın harfleri
+ * ~14 piksel yüksekliğinde kalıyor. Tesseract ~30 piksel istiyor, ML Kit
+ * ~20. Yani tam sayfa çekimde adres, motorun okuyabileceğinin altında.
+ *
+ * Ölçülen fark bunu doğruluyor: kullanıcı yalnız etiketi/adresi kırpıp
+ * çektiğinde okuma tutuyor, aynı belgenin tam sayfası tutmuyor. Sorun
+ * "OCR kötü" değil, adrese YETERİNCE YAKLAŞILMAMASI.
+ *
+ * NE YAPIYOR
+ * ----------
+ * Birinci geçişte sayfa normal ölçekte okunuyor. Adres satırı bozuk çıksa
+ * bile ONU İŞARET EDEN ETİKETLER (SAYIN, Alıcı Adres, Semt/Mahalle,
+ * İl/İlçe, Fatura adresi) daha büyük ve kalın basıldığı için okunuyor.
+ * Bu modül o etiketlerin kutularından adresin bulunduğu dikdörtgeni
+ * çıkarıyor; çağıran taraf orayı kırpıp 2-5 kat büyüterek İKİNCİ KEZ
+ * okutuyor. İnsanın "okuyamadım, yaklaşayım" davranışının aynısı.
+ *
+ * KOORDİNAT SİSTEMİ
+ * -----------------
+ * Giren satır kutuları da çıkan dikdörtgen de KAYNAK FOTOĞRAFIN pikselleri
+ * cinsinden. Ölçekleme/döndürme çağıranın işi; burada saf geometri var.
+ */
+
+const { sade } = require('./metin');
+
+/* Adresi işaret eden etiketler.
+   Her biri sade() sonrası aranıyor, yani "İl/İlçe:" → "il ilce" oluyor ve
+   Türkçe harf farkı sorun çıkarmıyor.
+
+   `yayilma`: etiketin ALTINDA kaç satır yüksekliği kadar yer taranacağı.
+   Etikete bitişik yazan biçimler (etiket solda, değer sağda) için küçük;
+   "SAYIN" gibi altına blok açan başlıklar için büyük. */
+const ETIKETLER = [
+  { desen: 'teslimat adresi', yayilma: 8, sag: 0.50, agirlik: 5 },
+  { desen: 'alici adres',    yayilma: 2,  sag: 0.60, agirlik: 4 },
+  { desen: 'semt mahalle',   yayilma: 3,  sag: 0.60, agirlik: 4 },
+  { desen: 'il ilce',        yayilma: 4,  sag: 0.60, agirlik: 3 },
+  { desen: 'sayin',          yayilma: 11, sag: 0.52, agirlik: 3 },
+  { desen: 'fatura adresi',  yayilma: 9,  sag: 0.45, agirlik: 2 },
+  { desen: 'teslimat zamani', yayilma: 6, sag: 0.60, agirlik: 2 },
+  { desen: 'cikis belgesi',  yayilma: 8,  sag: 0.60, agirlik: 2 },
+  { desen: 'musterino',      yayilma: 1,  sag: 0.45, agirlik: 1 },
+];
+
+/**
+ * ADRES BİÇİMLİ SATIR — ikinci ve ASIL çapa.
+ *
+ * İlk tasarımda yalnız bölüm başlıkları ("SAYIN", "Alıcı Adres") çapa
+ * olarak kullanılıyordu ve ÖLÇÜM GÖSTERDİ Kİ ÇALIŞMIYOR: tam sayfa
+ * çekilen e-İrsaliyelerin çoğunda o başlıklar bile okunamıyor. 45
+ * fotoğrafın hiçbirinde yakınlaştırma tetiklenmedi.
+ *
+ * Oysa dökümlere bakınca şu görüldü: ADIN kendisi bozulsa bile ADRES
+ * EKLERİ ayakta kalıyor. Gerçek örnek (fotoğraf 24, tam sayfa):
+ *     yazan  : "Pınarkent Mh.53 sokak Apt: 23 D: 3 K: 3"
+ *     okunan : "ile Mh.53 sokak Apt: 23D:3K:3"
+ * Mahalle adı tamamen kaybolmuş ama "Mh", "sokak", "Apt" duruyor. Çünkü
+ * bunlar kısa, sık geçen ve OCR'ın dilinde güçlü kalıplar.
+ *
+ * Yani "burada bir adres var" demek için adresin OKUNMASI gerekmiyor;
+ * biçimini tanımak yetiyor. Yakınlaştırma da zaten okunmayanı okumak için.
+ */
+const ADRES_EKLERI = [
+  'mh', 'mah', 'mahallesi', 'mahalle',
+  'sk', 'sok', 'sokak', 'sokagi', 'cd', 'cad', 'cadde', 'caddesi',
+  'blv', 'bulvar', 'bulvari', 'apt', 'apartmani', 'blok', 'no', 'daire',
+];
+
+/** Satır adres gibi mi duruyor? (en az iki farklı ek ya da ek + numara) */
+function adresBicimliMi(sadeMetin) {
+  const kelimeler = sadeMetin.split(' ').filter(Boolean);
+  if (kelimeler.length < 2) return 0;
+  let ek = 0, sayi = 0;
+  for (const k of kelimeler) {
+    if (ADRES_EKLERI.includes(k)) ek++;
+    else if (/^\d{1,5}$/.test(k)) sayi++;
+  }
+  if (ek >= 2) return 3;                 // "mh … sokak … apt" — güçlü
+  if (ek === 1 && sayi >= 1) return 2;   // "mh 53" ya da "sokak 9"
+  return 0;
+}
+
+/* Bir dikdörtgen sayfanın bundan büyük bir bölümünü kaplıyorsa yakınlaştırma
+   kazanç getirmiyor; ikinci geçişin anlamı kalmıyor. */
+const AZAMI_ALAN_ORANI = 0.55;
+
+/* Bundan küçük bir kırpma büyük olasılıkla yanlış yakalanmış tek bir
+   sözcüktür; adres blokları her zaman bundan geniştir. */
+const ASGARI_GENISLIK_ORANI = 0.12;
+
+/**
+ * Adres satırının GERÇEK sağ kenarı.
+ *
+ * Satırın son adres ekinden (mh/sokak/apt/no…) sonra en çok üç sözcük daha
+ * alınıyor — kapı, kat, daire numaraları oraya düşüyor. Ötesi başka bir
+ * sütuna ait. Sözcük kutusu yoksa satırın yarısıyla yetiniliyor.
+ */
+function adresSagKenari(satir, kelimeler, satirBoyu) {
+  if (!Array.isArray(kelimeler) || !kelimeler.length) {
+    return satir.x0 + (satir.x1 - satir.x0) * 0.5;
+  }
+  const icinde = kelimeler
+    .filter((k) => k && Number.isFinite(k.x0) &&
+      k.y0 < satir.y1 && k.y1 > satir.y0 && k.x0 >= satir.x0 - 2 && k.x1 <= satir.x1 + 2)
+    .sort((a, b) => a.x0 - b.x0);
+  if (icinde.length < 2) return satir.x0 + (satir.x1 - satir.x0) * 0.5;
+
+  let sonEk = -1;
+  for (let i = 0; i < icinde.length; i++) {
+    if (ADRES_EKLERI.includes(sade(icinde[i].metin))) sonEk = i;
+  }
+  if (sonEk < 0) return satir.x0 + (satir.x1 - satir.x0) * 0.5;
+  const bitis = Math.min(icinde.length - 1, sonEk + 3);
+  return Math.max(icinde[bitis].x1, satir.x0 + satirBoyu * 6);
+}
+
+/** İki dikdörtgen kesişiyor mu? */
+function kesisiyorMu(a, b) {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+
+/** Birleşim dikdörtgeni. */
+function birlestirKutu(a, b) {
+  return {
+    x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0),
+    x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1),
+  };
+}
+
+/**
+ * Etiketlerden adres dikdörtgenlerini çıkarır.
+ *
+ * @param {Array<{metin:string,x0:number,y0:number,x1:number,y1:number}>} satirlar
+ *        OCR'ın döndürdüğü satırlar, kaynak fotoğraf pikselinde.
+ * @param {number} genislik kaynak fotoğrafın genişliği
+ * @param {number} yukseklik kaynak fotoğrafın yüksekliği
+ * @returns {Array<{x0,y0,x1,y1,puan:number,etiketler:string[]}>}
+ *          Puanı yüksekten düşüğe sıralı. Boş dizi = etiket bulunamadı.
+ */
+function adresBolgeleri(satirlar, genislik, yukseklik, kelimeler) {
+  if (!Array.isArray(satirlar) || !satirlar.length) return [];
+
+  const gecerli = satirlar.filter(
+    (s) => s && typeof s.metin === 'string' &&
+      Number.isFinite(s.x0) && Number.isFinite(s.y0) &&
+      Number.isFinite(s.x1) && Number.isFinite(s.y1) && s.x1 > s.x0 && s.y1 > s.y0
+  );
+  if (!gecerli.length) return [];
+
+  /* Satır yüksekliğinin ortancası. Ortalama değil: tek bir devasa el yazısı
+     ya da başlık ortalamayı kaydırıp yayılmayı bozuyor. */
+  const yukseklikler = gecerli.map((s) => s.y1 - s.y0).sort((a, b) => a - b);
+  const satirBoyu = yukseklikler[yukseklikler.length >> 1] || 1;
+
+  const adaylar = [];
+  for (const s of gecerli) {
+    const d = sade(s.metin);
+
+    /* ÇAPA 2 — adres biçimli satır. Etiket okunamasa da bu ayakta kalıyor.
+       Satırın kendisi ve komşuları (üstte alıcı adı, altta ilçe/posta kodu)
+       birlikte kırpılıyor. */
+    const bicim = adresBicimliMi(d);
+    if (bicim) {
+      /* SATIR KUTUSU OLDUĞU GİBİ KULLANILAMIYOR — ölçüldü.
+         Tam sayfa belgede OCR, soldaki adresle sağdaki tabloyu TEK SATIR
+         sayıyor: "ile mh 53 sokak apt 23d 3k 3 | irsaliye zamani 16 39 38".
+         Satır kutusu sayfanın %92'sini kaplıyor, yakınlaştırma kazancı
+         1,09 kat çıkıyor ve bölge elenip ikinci geçiş hiç çalışmıyordu.
+         Bu yüzden sağ kenar, SON ADRES EKİNİN bittiği yere çekiliyor. */
+      const sag = adresSagKenari(s, kelimeler, satirBoyu);
+      adaylar.push({
+        x0: s.x0 - satirBoyu * 2, y0: s.y0 - satirBoyu * 2.5,
+        x1: Math.min(genislik, sag + satirBoyu * 2),
+        y1: s.y1 + satirBoyu * 3.5,
+        puan: bicim, etiketler: ['adres-bicimli'],
+      });
+    }
+
+    for (const e of ETIKETLER) {
+      if (!d.includes(e.desen)) continue;
+      /* Etiketin çevresinde taranacak alan: kendi satırından bir miktar
+         yukarısı (üstte kalan alıcı adı için), altında `yayilma` satır,
+         sağında sayfanın `sag` oranı kadarı (etiket solda değer sağda). */
+      const bolge = {
+        x0: s.x0 - satirBoyu,
+        y0: s.y0 - satirBoyu * 1.5,
+        x1: Math.min(genislik, s.x0 + genislik * e.sag),
+        y1: s.y1 + satirBoyu * e.yayilma,
+      };
+      /* O alana düşen satırların gerçek kutuları birleştiriliyor. Böylece
+         sabit bir dikdörtgen değil, metnin gerçekten olduğu yer kırpılıyor. */
+      let kutu = null;
+      for (const t of gecerli) {
+        if (!kesisiyorMu(bolge, t)) continue;
+        kutu = kutu ? birlestirKutu(kutu, t) : { x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1 };
+      }
+      if (!kutu) continue;
+      adaylar.push({ ...kutu, puan: e.agirlik, etiketler: [e.desen] });
+      break;   // bir satır birden çok etikete uymasın
+    }
+  }
+  if (!adaylar.length) return [];
+
+  /* Aynı bloğa ait etiketler (etikette Alıcı Adres + Semt/Mahalle + İl/İlçe
+     hep bir aradadır) tek dikdörtgende toplanıyor. Üst üste binen adaylar
+     birleştirilirken puanlar da toplanıyor: çok etiketli bölge, tek etiketli
+     bölgeye tercih edilsin. */
+  const birlesik = [];
+  for (const a of adaylar) {
+    const eslesen = birlesik.find((b) => kesisiyorMu(a, b));
+    if (eslesen) {
+      Object.assign(eslesen, birlestirKutu(eslesen, a));
+      eslesen.puan += a.puan;
+      for (const et of a.etiketler) if (!eslesen.etiketler.includes(et)) eslesen.etiketler.push(et);
+    } else {
+      birlesik.push({ ...a });
+    }
+  }
+
+  /* Kenar payı: OCR kutuları harflerin tam sınırında biter; harflerin
+     tepesindeki nokta ve altındaki kuyruk dışarıda kalırsa okuma bozulur. */
+  const sonuc = [];
+  for (const b of birlesik) {
+    const pay = Math.max(satirBoyu * 0.9, (b.x1 - b.x0) * 0.03);
+    const k = {
+      x0: Math.max(0, Math.round(b.x0 - pay)),
+      y0: Math.max(0, Math.round(b.y0 - pay)),
+      x1: Math.min(genislik, Math.round(b.x1 + pay)),
+      y1: Math.min(yukseklik, Math.round(b.y1 + pay)),
+      puan: b.puan,
+      etiketler: b.etiketler,
+    };
+    const g = k.x1 - k.x0, y = k.y1 - k.y0;
+    if (g < genislik * ASGARI_GENISLIK_ORANI) continue;
+    if ((g * y) / (genislik * yukseklik) > AZAMI_ALAN_ORANI) continue;
+    k.buyutme = genislik / g;      // ikinci geçişte kazanılacak kat sayısı
+    sonuc.push(k);
+  }
+
+  /* Yakınlaştırma kazancı 1,25 katın altındaysa ikinci geçiş boşuna zaman. */
+  return sonuc
+    .filter((k) => k.buyutme >= 1.25)
+    .sort((a, b) => b.puan - a.puan || b.buyutme - a.buyutme);
+}
+
+/**
+ * EĞİKLİK AÇISI
+ * -------------
+ * Etiket kâğıda düz yapıştırılmıyor; fotoğraflarda 15-20 derece yatık
+ * örnekler var. OCR motorları birkaç dereceyi tolere ediyor, bu kadarını
+ * etmiyor.
+ *
+ * Yöntem — yatay izdüşüm profili: görüntü bir açıyla döndürülüp her satırın
+ * koyu piksel sayısı toplanır. Metin DÜZ durduğunda satır aralarında boşluk,
+ * satırların üstünde yığılma olur; yani profilin VARYANSI tepe yapar. Eğik
+ * durduğunda harfler satırlara yayılıp profil düzleşir. En yüksek varyansı
+ * veren açı, metnin gerçek açısıdır.
+ *
+ * Görüntü matrisi üzerinde çalışır (0-255 gri), böylece hem tarayıcıda
+ * (ImageData) hem Node'da (Jimp) aynı kod kullanılabiliyor.
+ *
+ * @param {Uint8ClampedArray|Uint8Array} gri tek kanallı gri piksel dizisi
+ * @param {number} g genişlik
+ * @param {number} y yükseklik
+ * @param {number} [azami] taranacak azami açı (derece)
+ * @returns {number} düzeltmek için uygulanacak açı (derece); 0 = eğiklik yok
+ */
+function egiklikAcisi(gri, g, y, azami = 22) {
+  if (g < 40 || y < 40) return 0;
+
+  /* Koyu piksel eşiği: ortalamanın altı. Sabit eşik gölgeli fotoğrafta
+     tüm sayfayı koyu sayıyor. */
+  let toplam = 0;
+  for (let i = 0; i < gri.length; i++) toplam += gri[i];
+  const esik = toplam / gri.length - 25;
+
+  /* Hız için satır atlanıyor: metin açısını bulmak için her pikseli
+     saymak gerekmiyor, altıda biri yetiyor. */
+  const adim = Math.max(1, Math.round(y / 400));
+
+  let enIyiAci = 0, enIyiPuan = -1;
+  for (let aci = -azami; aci <= azami; aci += 1) {
+    const t = Math.tan((aci * Math.PI) / 180);
+    const profil = new Float64Array(y);
+    for (let sy = 0; sy < y; sy += adim) {
+      for (let sx = 0; sx < g; sx += 2) {
+        if (gri[sy * g + sx] >= esik) continue;
+        /* Bu pikselin, görüntü `aci` kadar döndürülseydi düşeceği satır. */
+        const hedef = sy + ((sx - (g >> 1)) * t) | 0;
+        if (hedef >= 0 && hedef < y) profil[hedef]++;
+      }
+    }
+    /* Varyans: satırlar arası fark ne kadar keskinse o kadar büyük. */
+    let ort = 0;
+    for (let i = 0; i < y; i++) ort += profil[i];
+    ort /= y;
+    let vary = 0;
+    for (let i = 0; i < y; i++) { const f = profil[i] - ort; vary += f * f; }
+    if (vary > enIyiPuan) { enIyiPuan = vary; enIyiAci = aci; }
+  }
+
+  /* Bir derecelik gürültüyü düzeltmeye çalışmak fayda değil zarar:
+     her döndürme yeniden örnekleme, yani biraz bulanıklık demek. */
+  return Math.abs(enIyiAci) < 3 ? 0 : -enIyiAci;
+}
+
+/**
+ * BİR ETİKETİN ALTINDAKİ/SAĞINDAKİ METNİ ÇIKARIR
+ * ==============================================
+ *
+ * NEDEN GEREKLİ — ölçülmüş bir yanlış-adres tuzağı:
+ * Satış belgesinde "Fatura adresi" ile "Teslimat adresi" YAN YANA iki sütun
+ * hâlinde basılıyor ve çoğu zaman FARKLI adresler oluyor. Örnek belge:
+ *
+ *   Fatura adresi:                    Teslimat adresi:
+ *   3. SANAYİ SİTESİ 52 SOK 34        ÇAKMAK MAH 134/1 SOK 9 DAİRE 6
+ *
+ * OCR sayfayı satır satır okuduğu için ikisi TEK SATIRDA birleşiyor:
+ *   "3. SANAYİ SİTESİ 52 SOK 34 ÇAKMAK MAH 134/1 SOK 9 DAİRE 6 29397961"
+ * Düz metinde bunları ayırmanın yolu yok. Motor da fatura adresini seçip
+ * sürücüyü emin adımlarla YANLIŞ ADRESE gönderiyordu — hatanın en kötü
+ * türü, çünkü kırmızı bile yanmıyor.
+ *
+ * Ayırt edici tek bilgi KONUM: teslimat sütunu, etiketinin sağında ve
+ * altında. Sözcük kutuları elimizde olduğu için bunu ayırmak kolay.
+ *
+ * @param {Array<{metin,x0,y0,x1,y1}>} kelimeler kutulu OCR sözcükleri
+ * @param {string[]} desenler sade() edilmiş etiket kalıpları
+ * @param {object} [ayar] {sag:0.5, yayilma:8}
+ * @returns {string|null} bloğun metni, etiket bulunamazsa null
+ */
+function bolumMetni(kelimeler, desenler, ayar) {
+  if (!Array.isArray(kelimeler) || !kelimeler.length) return null;
+  const kutulu = kelimeler.filter((k) => k && Number.isFinite(k.x0) && Number.isFinite(k.y0));
+  if (!kutulu.length) return null;
+
+  const a = ayar || {};
+  const sagOran = a.sag == null ? 0.5 : a.sag;
+  const yayilma = a.yayilma == null ? 8 : a.yayilma;
+
+  const boylar = kutulu.map((k) => k.y1 - k.y0).sort((x, y) => x - y);
+  const satirBoyu = boylar[boylar.length >> 1] || 10;
+  const enSag = Math.max(...kutulu.map((k) => k.x1));
+  const enSol = Math.min(...kutulu.map((k) => k.x0));
+  const sayfaGenislik = enSag - enSol || 1;
+
+  /* Etiket iki sözcük ("teslimat adresi") — art arda gelen sözcükler
+     birleştirilerek aranıyor. */
+  let etiket = null;
+  for (let i = 0; i < kutulu.length && !etiket; i++) {
+    for (let n = 1; n <= 3 && i + n <= kutulu.length; n++) {
+      const dizi = kutulu.slice(i, i + n);
+      /* Sözcükler aynı satırda olmalı, yoksa iki sütunun sözcükleri
+         yan yana gelip olmayan bir etiket uydurur. */
+      if (Math.abs(dizi[dizi.length - 1].y0 - dizi[0].y0) > satirBoyu * 0.7) break;
+      const d = sade(dizi.map((k) => k.metin).join(' '));
+      if (desenler.some((p) => d === p || d.startsWith(p))) {
+        etiket = { x0: dizi[0].x0, y0: dizi[0].y0, y1: dizi[dizi.length - 1].y1 };
+        break;
+      }
+    }
+  }
+  if (!etiket) return null;
+
+  /* Etiketin sütunu: solunda küçük bir pay, sağında sayfanın bir bölümü. */
+  const solSinir = etiket.x0 - satirBoyu * 1.2;
+  const sagSinir = etiket.x0 + sayfaGenislik * sagOran;
+  const altSinir = etiket.y1 + satirBoyu * yayilma;
+
+  const secilen = kutulu.filter((k) =>
+    k.x0 >= solSinir && k.x0 <= sagSinir && k.y0 >= etiket.y0 && k.y0 <= altSinir);
+  if (secilen.length < 2) return null;
+
+  /* Okuma sırasına diz: önce satır (yuvarlanmış y), sonra x. */
+  secilen.sort((p, q) => {
+    const fark = p.y0 - q.y0;
+    if (Math.abs(fark) > satirBoyu * 0.6) return fark;
+    return p.x0 - q.x0;
+  });
+  const satirlar = [];
+  let sonY = null;
+  for (const k of secilen) {
+    if (sonY === null || Math.abs(k.y0 - sonY) > satirBoyu * 0.6) { satirlar.push([]); sonY = k.y0; }
+    satirlar[satirlar.length - 1].push(k.metin);
+  }
+  return satirlar.map((s) => s.join(' ')).join('\n');
+}
+
+/* Bölüm etiketleri — sade() edilmiş hâlleriyle. */
+/* "teslimat" TEK BAŞINA DESEN OLARAK KULLANILMIYOR — ölçüldü:
+   belgede "Teslimat tarihi:" ve "Teslimat türü:" de geçiyor ve blok yanlış
+   yerden, sayfanın üst tarafından başlıyordu. */
+const TESLIMAT_DESENLERI = ['teslimat adresi', 'teslimat adres'];
+const FATURA_DESENLERI = ['fatura adresi', 'fatura adres'];
+
+module.exports = {
+  adresBolgeleri, egiklikAcisi, bolumMetni,
+  ETIKETLER, TESLIMAT_DESENLERI, FATURA_DESENLERI,
+};
+
+  };
+
   global.Motor = {
     metin: require('./metin'),
     adres: require('./adres'),
@@ -1974,6 +2612,7 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
     fatura: require('./fatura'),
     rota: require('./rota'),
     ors: require('./ors'),
-    surum: '20260830195002',
+    bolge: require('./bolge'),
+    surum: '20260830212646',
   };
 })(typeof self !== 'undefined' ? self : this);

@@ -10,7 +10,7 @@
 <title>Fatura Rota</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="ikon/ikon-180.png">
-<link rel="stylesheet" href="css/stil.css?s=20260830195002">
+<link rel="stylesheet" href="css/stil.css?s=20260830212646">
 </head>
 <body>
 
@@ -82,6 +82,21 @@
     </div>
     <div class="adres" id="orsAtif" style="margin-top:8px;font-size:11px"></div>
   </div>
+
+  <!-- Bir gün beklenmedik sıralandığında sorunu ancak O GÜNÜN VERİSİ
+       gösterir: hangi adres nereye çözülmüş, rota nereden başlamış.
+       Bu düğme onu okunur bir metne çeviriyor. -->
+  <div class="kart" style="margin-top:12px;display:block">
+    <div class="ad" style="margin-bottom:6px">🧪 Gün kaydını dışa aktar</div>
+    <div class="adres">Rota ya da adres beklediğin gibi çıkmadıysa, o günün
+      kaydını metin olarak çıkar ve gönder. Ad ve telefon çıkarılmaz.</div>
+    <div class="dugme-sirasi" style="margin-top:8px">
+      <button class="dugme kucuk" id="btnDisaAktar">Bugünü çıkar</button>
+      <button class="dugme kucuk" id="btnDisaAktarHepsi">Tüm günleri çıkar</button>
+    </div>
+    <textarea id="disaAktarAlan" class="metin" readonly hidden
+              style="margin-top:8px;min-height:150px;font-family:ui-monospace,monospace;font-size:11px"></textarea>
+  </div>
 </main>
 
 <!-- yüzen eylem -->
@@ -124,10 +139,41 @@
   </div>
 </div>
 
+<!-- ADRESİ PARMAKLA GÖSTER.
+     Tam sayfa çekilen belgelerde adres 7 puntoluk tek satır; motor
+     yakınlaştırmayı kendi denemesine rağmen bazı belgelerde tutturamıyor.
+     O zaman en hızlı yol, sürücünün adresin üstüne parmağıyla bir kutu
+     çizmesi: elle adres yazmaya göre saniyeler sürüyor. -->
+<div class="katman" id="katmanKutu">
+  <div class="icerik kutu-icerik">
+    <div class="katman-ust">
+      <button class="katman-kapat" id="btnKutuKapat" aria-label="Kapat">✕</button>
+      <h2>Adresin üstünü çiz</h2>
+      <button class="katman-sil" id="btnKutuDondur" title="Döndür">⟳</button>
+    </div>
+    <div class="katman-govde kutu-govde">
+      <div class="adres" style="margin-bottom:8px">
+        Parmağınla <b>adresin yazdığı yerin üstünü</b> kutu içine al.
+        Fotoğraf yan ya da ters çekildiyse sağ üstteki <b>⟳</b> ile çevir.
+      </div>
+      <div class="kutu-sahne" id="kutuSahne">
+        <canvas id="kutuTuval"></canvas>
+        <div class="kutu-secim" id="kutuSecim" hidden></div>
+      </div>
+    </div>
+    <div class="katman-alt">
+      <div class="dugme-sirasi">
+        <button class="dugme" id="btnKutuIptal">Vazgeç</button>
+        <button class="dugme birincil" id="btnKutuOku">Seçili yeri oku</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="ocr/tesseract.min.js?s=20260830185945"></script>
-<script src="js/ocr.js?s=20260830195002"></script>
-<script src="js/motor.js?s=20260830195002"></script>
-<script src="js/depo.js?s=20260830195002"></script>
-<script src="js/app.js?s=20260830195002"></script>
+<script src="js/ocr.js?s=20260830212646"></script>
+<script src="js/motor.js?s=20260830212646"></script>
+<script src="js/depo.js?s=20260830212646"></script>
+<script src="js/app.js?s=20260830212646"></script>
 </body>
 </html>

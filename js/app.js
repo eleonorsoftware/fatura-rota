@@ -261,7 +261,27 @@
     const supheli = koordinatli.filter((d) => d.renk !== 'yesil').length;
     if (supheli && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
 
-    const baslangic = durum.konum || { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
+    /* BAŞLANGIÇ = SÜRÜCÜNÜN O ANKİ KONUMU. Taze isteniyor, beklenmiyor değil.
+       Önbellekteki konum sabah evde alınmış olabilir; rota depodan değil
+       evden başlar ve bütün sıra kayar. */
+    let baslangic = null, baslangicKaynak = 'konum';
+    try {
+      bilgiGoster('Konumun alınıyor…', true);
+      baslangic = await konumAl({ sure: 10000, enFazlaYas: 15000 });
+    } catch (e) {
+      /* Konum yoksa SESSİZCE ilk durağa düşmek yanlış rota üretiyordu.
+         Sürücüye ne olduğunu söyleyip kararı ona bırakıyoruz. */
+      bilgiGizle();
+      const devam = confirm(
+        e.message + '\n\n' +
+        'Konum olmadan rota, İLK OKUTULAN ADRESTEN başlatılır ve sıra ' +
+        'bulunduğun yere göre olmaz.\n\n' +
+        'Yine de bu şekilde çıkarayım mı?');
+      if (!devam) { uyar('Rota çıkarılmadı — konum izni verip tekrar dene.'); return; }
+      baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
+      baslangicKaynak = 'ilk-durak';
+    }
+
     const noktalar = koordinatli.map((d) => ({ lat: d.lat, lng: d.lng }));
 
     /* GERÇEK YOL SÜRESİ varsa onunla, yoksa kuş uçuşuyla sırala.
@@ -289,8 +309,15 @@
     const r = M.rota.sirala(baslangic, noktalar, matris ? { matris, birim } : {});
     await D.rotaKaydet(durum.gun, r.sira.map((i) => koordinatli[i].id), {
       baslangicLat: baslangic.lat, baslangicLng: baslangic.lng,
+      baslangicKaynak, baslangicDogruluk: baslangic.dogruluk || null,
+      matrisKaynak: matris ? 'ors' : 'kusucusu',
       toplamMetre: r.toplamMetre, toplamDakika: r.toplamDakika,
+      yontem: r.yontem,
     });
+    bilgiGizle();
+    if (baslangicKaynak === 'ilk-durak') {
+      uyar('Rota, konum alınamadığı için ilk okutulan adresten başlatıldı.');
+    }
     sayfaGoster('bugun');
     ciz();
   }
@@ -298,12 +325,49 @@
   /* ═══════════════════════════════════════════════════════ konum ═══ */
 
   function konumIste() {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (p) => { durum.konum = { lat: p.coords.latitude, lng: p.coords.longitude }; varisKontrol(); },
-      () => {},
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
-    );
+    konumAl({ enFazlaYas: 30000 }).then(varisKontrol).catch(() => {});
+  }
+
+  /**
+   * KONUM AL — söz (Promise) döndüren, HATASI GÖRÜNEN sürüm.
+   *
+   * ⚠️ BURADA SESSİZ BİR HATA VARDI VE ROTAYI BOZUYORDU.
+   * Önceki hâlde konum hatası `() => {}` ile yutuluyordu. Konum izni
+   * verilmemişse, GPS kilitlenmemişse ya da sürücü rotayı uygulamayı açar
+   * açmaz istediyse `durum.konum` boş kalıyor, rota da sessizce
+   * "İLK OKUTULAN FATURANIN ADRESİNDEN" başlatılıyordu.
+   *
+   * Sonuç tam olarak kullanıcının anlattığı şey: 2 km'deki durak dururken
+   * rota 5,1 km'deki durakla başlıyor. Rota aslında yanlış değil —
+   * YANLIŞ YERDEN başlatılmış bir rota için doğru. Sürücü bunu göremiyor
+   * çünkü ekranda başlangıcın nerede alındığı hiç yazmıyor.
+   *
+   * Artık: hata yukarı taşınıyor, rota kurulurken konum TAZE isteniyor ve
+   * alınamazsa sürücüye ne olduğu açıkça söyleniyor.
+   */
+  function konumAl(ayar) {
+    const a = ayar || {};
+    return new Promise((coz, hata) => {
+      if (!navigator.geolocation) { hata(new Error('Bu cihazda konum servisi yok')); return; }
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          durum.konum = {
+            lat: p.coords.latitude, lng: p.coords.longitude,
+            dogruluk: p.coords.accuracy, zaman: Date.now(),
+          };
+          coz(durum.konum);
+        },
+        (e) => {
+          const mesajlar = {
+            1: 'Konum izni verilmemiş. Tarayıcı ayarlarından bu siteye konum izni ver.',
+            2: 'Konum alınamadı — GPS kapalı ya da sinyal yok.',
+            3: 'Konum alınamadı — çok uzun sürdü.',
+          };
+          hata(new Error(mesajlar[e && e.code] || 'Konum alınamadı'));
+        },
+        { enableHighAccuracy: true, timeout: a.sure || 8000, maximumAge: a.enFazlaYas == null ? 0 : a.enFazlaYas }
+      );
+    });
   }
 
   /**
@@ -462,6 +526,45 @@
     const parca = [];
     if (o.kirmizi) parca.push(`<div class="uyari kirmizi">⚠ <div><b>${o.kirmizi} adres okunamadı.</b> Rotaya giremezler — dokunup elle düzelt.</div></div>`);
     if (o.sari) parca.push(`<div class="uyari">⚠ <div><b>${o.sari} adres kontrol bekliyor.</b> Doğruysa dokunup onayla.</div></div>`);
+
+    /* ROTANIN NEREDEN BAŞLADIĞI GÖRÜNMELİ.
+       Sıra mantıksız göründüğünde ilk sorulacak soru budur; ekranda
+       yazmadığı için sürücü rotanın yanlış yerden kurulduğunu göremiyordu. */
+    const r = durum.gun && durum.gun.rota;
+    if (r) {
+      if (r.baslangicKaynak === 'ilk-durak') {
+        parca.push(`<div class="uyari kirmizi">⚠ <div>
+          <b>Bu rota senin konumundan çıkarılmadı.</b>
+          Konum alınamadığı için ilk okutulan adres başlangıç sayıldı — sıra
+          bulunduğun yere göre değil.
+          <button class="dugme kucuk" data-eylem="rota" style="margin-top:6px">Konumla yeniden çıkar</button>
+        </div></div>`);
+      } else if (r.baslangicLat != null) {
+        const yas = r.zaman ? Math.round((Date.now() - new Date(r.zaman).getTime()) / 60000) : null;
+        /* EN YAKIN DURAKLA BAŞLAMAMAK ÇOĞU ZAMAN DOĞRUDUR — ama açıklanmazsa
+           hata gibi görünüyor. Kullanıcı "2 km'deki dururken beni 5,1 km'ye
+           attı" dedi; en yakına gitmek, sonrasında geri dönmeyi gerektirip
+           toplam yolu uzatabiliyor. Onun için ilk durak en yakın değilse
+           nedeni bir cümleyle yazılıyor. */
+        let ilkNot = '';
+        const bekleyenler = D.siraliDuraklar(durum.gun).filter((d) => d.sira != null && d.lat != null);
+        if (bekleyenler.length > 2 && r.baslangicLat != null) {
+          const bas = { lat: r.baslangicLat, lng: r.baslangicLng };
+          const ilk = bekleyenler[0];
+          const enYakin = bekleyenler.reduce((a, b) =>
+            mesafeMetre(bas, b) < mesafeMetre(bas, a) ? b : a);
+          if (enYakin.id !== ilk.id) {
+            ilkNot = `<br>İlk durak en yakın olan değil (${(mesafeMetre(bas, enYakin) / 1000).toFixed(1)} km'deki
+              ${kacis(enYakin.mahalle || 'durak')} sonraya kaldı) — toplam yol böyle daha kısa çıkıyor.`;
+          }
+        }
+        parca.push(`<div class="uyari bilgi">🧭 <div>
+          Başlangıç: <b>bulunduğun konum</b>${r.baslangicDogruluk ? ` (±${Math.round(r.baslangicDogruluk)} m)` : ''}
+          · ${r.matrisKaynak === 'ors' ? 'gerçek yol süresiyle' : 'kuş uçuşu tahminle'} sıralandı${yas != null && yas > 45 ? ` · ${yas} dk önce` : ''}.
+          ${yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : ''}${ilkNot}
+        </div></div>`);
+      }
+    }
     alan.innerHTML = parca.join('');
   }
 
@@ -475,6 +578,7 @@
       return;
     }
     const aktifId = durum.gun.rota ? (D.siradaki(durum.gun) || {}).id : null;
+    const araliklar = duraklarArasiMesafe(liste);
     alan.innerHTML = liste.filter((d) => d.id !== aktifId).map((d) => `
       <div class="kart tiklanir ${d.renk} ${d.durum === 'teslim' ? 'teslim' : ''}" data-eylem="ac" data-id="${d.id}">
         <div class="sira">${d.durum === 'teslim' ? '✓' : d.durum === 'basarisiz' ? '✕' : (d.sira ?? '·')}</div>
@@ -487,6 +591,7 @@
             ${d.renk !== 'yesil' ? `<span class="rozet ${d.renk}">${d.renk === 'kirmizi' ? 'okunamadı' : 'kontrol et'}</span>` : ''}
             ${d.keskinlik === 'yol' ? '<span class="rozet sari">kapı no yok</span>' : ''}
             ${d.elleDuzeltildi ? '<span class="rozet yesil">elle düzeltildi</span>' : ''}
+            ${araliklar[d.id] != null ? `<span class="rozet">${araliklar[d.id].toFixed(1)} km</span>` : ''}
           </div>
         </div>
       </div>`).join('');
@@ -507,6 +612,26 @@
       alan.innerHTML = `<button class="dugme birincil" data-eylem="rota">
         ${varRota ? '🔄 Rotayı Yenile' : '🧭 Rotayı Oluştur'} · ${kalan} durak</button>`;
     }
+  }
+
+  /**
+   * Her durağın BİR ÖNCEKİ duraktan uzaklığı (km, kuş uçuşu).
+   *
+   * Sürücü sıranın neden böyle olduğunu ancak aradaki mesafeleri görürse
+   * yargılayabiliyor. "Beni 10 km uzağa attı" şikâyeti de ancak böyle
+   * doğrulanabilir hâle geliyor: aralık kartın üstünde yazıyor.
+   * İlk durak için ölçü, rotanın başlangıç konumundan.
+   */
+  function duraklarArasiMesafe(liste) {
+    const sonuc = {};
+    const r = durum.gun && durum.gun.rota;
+    let onceki = r && r.baslangicLat != null ? { lat: r.baslangicLat, lng: r.baslangicLng } : null;
+    for (const d of liste) {
+      if (d.sira == null || d.lat == null) continue;
+      if (onceki) sonuc[d.id] = mesafeMetre(onceki, d) / 1000;
+      onceki = { lat: d.lat, lng: d.lng };
+    }
+    return sonuc;
   }
 
   function adresYaz(d) {
@@ -532,11 +657,14 @@
 
   /* ═══════════════════════════════════════════════════════ tarama ekranı */
 
-  function taramaSonucGoster(sonuc) {
+  function taramaSonucGoster(sonuc, kareId) {
     const d = sonuc.durak;
     const alan = $('#taramaSonuc');
     const kart = document.createElement('div');
     kart.className = `kart ${d.renk}`;
+    /* Adres çözülemediyse fotoğraf hâlâ elimizde: sürücü adresin üstünü
+       parmağıyla gösterip aynı kareyi yeniden okutabilsin. */
+    const kutuVar = d.renk === 'kirmizi' && kareId && bekleyenKareler.has(kareId);
     kart.innerHTML = `
       <div class="sira">${sonuc.birlestirildi ? '↩' : '+'}</div>
       <div class="govde">
@@ -546,10 +674,13 @@
           ${sonuc.birlestirildi ? '<span class="rozet">aynı belge — birleştirildi</span>'
                                : '<span class="rozet yesil">yeni durak</span>'}
           ${d.renk !== 'yesil' ? `<span class="rozet ${d.renk}">${d.renk === 'kirmizi' ? 'okunamadı' : 'kontrol et'}</span>` : ''}
+          ${kutuVar ? `<button class="dugme kucuk birincil" data-kutu="${kareId}">📐 Adresi göster</button>` : ''}
           <button class="dugme kucuk" data-eylem="duzelt" data-id="${d.id}">Düzelt</button>
           <button class="dugme kucuk kirmizi" data-eylem="durakSil" data-id="${d.id}">Sil</button>
         </div>
       </div>`;
+    const kd = kart.querySelector('[data-kutu]');
+    if (kd) kd.addEventListener('click', () => kutuAc(kd.dataset.kutu));
     alan.prepend(kart);
   }
 
@@ -662,6 +793,7 @@
 
   function olaylariBagla() {
     $$('.alt button').forEach((b) => b.addEventListener('click', () => sayfaGoster(b.dataset.sayfa)));
+    kutuOlaylari();
 
     document.addEventListener('click', async (e) => {
       const h = e.target.closest('[data-eylem]');
@@ -756,10 +888,74 @@
       cizArsiv();
     });
 
+    const disaAktar = document.querySelector('#btnDisaAktar');
+    if (disaAktar) disaAktar.addEventListener('click', () => gunuDisaAktar(false));
+    const disaAktarHepsi = document.querySelector('#btnDisaAktarHepsi');
+    if (disaAktarHepsi) disaAktarHepsi.addEventListener('click', () => gunuDisaAktar(true));
+
     /* Uygulamaya dönüldüğünde varış kontrolü — Google Maps'ten dönüş anı. */
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) konumIste();
     });
+  }
+
+  /**
+   * GÜN KAYDINI OKUNUR METNE ÇEVİRİR.
+   *
+   * Rota beklenmedik çıktığında sorunun nerede olduğunu ancak o günün
+   * gerçek verisi gösteriyor: adres nereye çözülmüş, koordinat ne, rota
+   * hangi noktadan başlamış, mesafeler ne. Telefondaki veriye başka türlü
+   * bakılamıyor.
+   *
+   * AD VE TELEFON ÇIKARILMIYOR — dışarı verilen metinde müşteri kimliği
+   * bulunmasın; sorunu çözmek için adres ve koordinat yetiyor.
+   */
+  async function gunuDisaAktar(hepsi) {
+    const alan = $('#disaAktarAlan');
+    const gunler = hepsi ? await D.gunler() : (durum.gun ? [durum.gun] : []);
+    if (!gunler.length) { uyar('Aktarılacak gün yok.'); return; }
+
+    const satir = [];
+    satir.push('FATURA ROTA — GÜN KAYDI');
+    satir.push('sürüm: ' + ((M && M.surum) || '?') +
+               '   çıkarma: ' + new Date().toISOString());
+    for (const g of gunler) {
+      const liste = D.siraliDuraklar(g);
+      const r = g.rota;
+      satir.push('');
+      satir.push('═══ ' + g.tarih + '  (' + g.durum + ')  ' + liste.length + ' durak');
+      if (r) {
+        satir.push('  rota: başlangıç ' + (r.baslangicLat != null
+            ? r.baslangicLat.toFixed(5) + ',' + r.baslangicLng.toFixed(5) : 'YOK') +
+          '  kaynak=' + (r.baslangicKaynak || '?') +
+          (r.baslangicDogruluk ? ' ±' + Math.round(r.baslangicDogruluk) + 'm' : '') +
+          '  mesafe=' + (r.matrisKaynak || '?') +
+          '  yöntem=' + (r.yontem || '?') +
+          '  toplam=' + (r.toplamMetre != null ? (r.toplamMetre / 1000).toFixed(1) + 'km' : '?') +
+          '  zaman=' + (r.zaman || '?'));
+      } else {
+        satir.push('  rota: çıkarılmamış');
+      }
+      let onceki = r && r.baslangicLat != null ? { lat: r.baslangicLat, lng: r.baslangicLng } : null;
+      for (const d of liste) {
+        const km = (onceki && d.lat != null) ? (mesafeMetre(onceki, d) / 1000).toFixed(1) : '  —';
+        satir.push(
+          '  ' + String(d.sira ?? '·').padStart(3) + '. ' +
+          String(km).padStart(5) + 'km  ' +
+          (d.lat != null ? d.lat.toFixed(5) + ',' + d.lng.toFixed(5) : 'koordinat yok').padEnd(20) + ' ' +
+          String(d.guven ?? '').padStart(3) + ' ' + (d.renk || '').padEnd(8) +
+          (d.keskinlik || '').padEnd(5) + ' | ' +
+          [d.ilce, d.mahalle, d.yol, d.kapino && 'no ' + d.kapino, d.daire && 'd' + d.daire]
+            .filter(Boolean).join(' / '));
+        if (d.lat != null) onceki = { lat: d.lat, lng: d.lng };
+      }
+    }
+    const metin = satir.join('\n');
+    alan.value = metin;
+    alan.hidden = false;
+    alan.select();
+    try { await navigator.clipboard.writeText(metin); uyar('Panoya kopyalandı — yapıştırıp gönderebilirsin.'); }
+    catch (_) { uyar('Aşağıdaki metni kopyalayıp gönder.'); }
   }
 
   /**
@@ -772,6 +968,7 @@
   async function dosyalariIsle(dosyalar) {
     if (!dosyalar || !dosyalar.length) return;
     if (!window.Ocr) { uyar('Okuma katmanı yüklenemedi.'); return; }
+    if (!dosyalariIsle._sayac) dosyalariIsle._sayac = 0;
 
     let sira = 0;
     for (const dosya of dosyalar) {
@@ -780,15 +977,45 @@
       /* Tanı bilgisi — bir şey ters giderse ekranda görünsün. Telefonda
          hata ayıklama konsolu açmak mümkün değil; kullanıcının okuyup
          söyleyebileceği somut bilgi gerekiyor. */
+      /* Kare bellekte tutuluyor: okuma tutmazsa sürücü adresin üstünü
+         parmağıyla gösterip aynı fotoğrafı yeniden okutabilsin.
+         Yalnız son birkaç kare saklanıyor — 50 fotoğraflık bir günde
+         hepsini tutmak telefonun belleğini şişirir. */
+      const kareId = 'k' + (++dosyalariIsle._sayac);
+      bekleyenKareler.set(kareId, { dosya, ad: dosya.name || 'kare' });
+      while (bekleyenKareler.size > 6) bekleyenKareler.delete(bekleyenKareler.keys().next().value);
+
       const okumaBilgisi = {
+        kareId,
         dosya: (dosya.name || 'kare') + ' · ' + Math.round((dosya.size||0)/1024) + ' KB' +
                (dosya.type ? ' · ' + dosya.type : ''),
       };
       try {
         bilgiGoster(onek + 'Fotoğraf okunuyor…', true);
-        const okuma = await window.Ocr.oku(dosya, (durumAdi, oran) => {
-          if (durumAdi === 'recognizing text') bilgiGoster(onek + 'Okunuyor… %' + Math.round(oran * 100), true);
-          else if (/loading|initializing/i.test(durumAdi)) bilgiGoster('Okuma motoru ilk kez hazırlanıyor…', true);
+        /* Kademeli okumanın DURMA ÖLÇÜTÜ, motorun kendi güveni.
+           Adres net çözüldüyse ikinci/üçüncü geçiş hiç çalışmıyor; yani iyi
+           çekilmiş bir etiket fotoğrafı eskisiyle aynı hızda okunuyor.
+           Ancak çözülemediğinde yakınlaştırma ve yön düzeltme devreye giriyor. */
+        const okuma = await window.Ocr.oku(dosya, {
+          yeter: 70,
+          degerlendir: async (o) => {
+            try {
+              /* O ilçenin verisi henüz inmemişse çözüm 0 çıkar ve motor
+                 boşuna kademe tırmanır. Önce veri indiriliyor. */
+              await ilceleriHazirla([o.metin]);
+              const p = M.metin.belgeleriAyir(o.metin);
+              let en = 0;
+              for (const parca of p) {
+                const c = M.fatura.cozBelge(durum.kaynak, { serbest: parca, ocrKelimeler: o.kelimeler });
+                if (c.guven > en) en = c.guven;
+              }
+              return en;
+            } catch (_) { return 0; }
+          },
+          ilerleme: (durumAdi, oran) => {
+            if (durumAdi === 'recognizing text') bilgiGoster(onek + 'Okunuyor… %' + Math.round(oran * 100), true);
+            else if (/loading|initializing/i.test(durumAdi)) bilgiGoster('Okuma motoru ilk kez hazırlanıyor…', true);
+          },
         });
 
         /* Boş sayfa / bulanık kare: motora sokmadan önce ele.
@@ -802,13 +1029,15 @@
         }
 
         const parcalar = M.metin.belgeleriAyir(okuma.metin);
+        let kirmizi = 0;
         for (const parca of parcalar) {
           const s = await metniIsle(parca, { ocrKelimeler: okuma.kelimeler });
-          if (s) taramaSonucGoster(s);
+          if (s) { taramaSonucGoster(s, kareId); if (s.renk === 'kirmizi') kirmizi++; }
         }
         if (parcalar.length > 1) {
           bilgiGoster('Bu karede ' + parcalar.length + ' sipariş vardı, ayrı ayrı eklendi.');
         }
+        if (!kirmizi) bekleyenKareler.delete(kareId);
       } catch (e) {
         /* HATA KAYBOLMAMALI. Önce kaybolan bir bildirim kullanılıyordu ve
            sürücü ekrana bakmadığı an "hiçbir şey olmadı" sanıyordu — iPhone'da
@@ -818,6 +1047,161 @@
       }
     }
     bilgiGizle();
+  }
+
+  /* ══════════════════════════════════ adresi parmakla göster ═══ */
+
+  /**
+   * OKUNAMAYAN FOTOĞRAF İÇİN SON ÇARE — VE EN HIZLISI.
+   *
+   * Motor kendi başına yakınlaştırmayı deniyor (bkz. js/ocr.js kademeleri),
+   * ama bazı belgelerde adresi işaret eden bir etiket hiç okunamıyor ve
+   * nereye bakacağını bilemiyor. O noktada adresin nerede olduğunu bilen
+   * tek kişi sürücü. Parmakla bir kutu çizmek 3 saniye; adresi elle yazmak
+   * yarım dakika.
+   *
+   * Seçilen kutu, KAYNAK fotoğrafın piksellerinde hesaplanıp doğrudan
+   * OCR'a veriliyor; küçük bir alan olduğu için 3-4 kat büyütülerek
+   * okunuyor — yani asıl sorunu (çözünürlük) da çözüyor.
+   */
+  const bekleyenKareler = new Map();       // id → {dosya, ad}
+  let kutuDurum = null;
+
+  function kutuAc(kareId) {
+    const kayit = bekleyenKareler.get(kareId);
+    if (!kayit) { uyar('Bu fotoğraf artık bellekte yok, yeniden çek.'); return; }
+    const tuval = $('#kutuTuval');
+    const g = new Image();
+    const url = URL.createObjectURL(kayit.dosya);
+    g.onload = () => {
+      kutuDurum = { kareId, img: g, url, derece: 0, secim: null };
+      kutuCiz();
+      $('#katmanKutu').classList.add('acik');
+    };
+    g.onerror = () => { URL.revokeObjectURL(url); uyar('Fotoğraf açılamadı.'); };
+    g.src = url;
+    void tuval;
+  }
+
+  /** Fotoğrafı sahneye sığdırarak çizer; ölçek bilgisi saklanıyor. */
+  function kutuCiz() {
+    const s = kutuDurum;
+    if (!s) return;
+    const sahne = $('#kutuSahne');
+    const tuval = $('#kutuTuval');
+    const d = ((s.derece % 360) + 360) % 360;
+    const kaynakG = (d === 90 || d === 270) ? s.img.naturalHeight : s.img.naturalWidth;
+    const kaynakY = (d === 90 || d === 270) ? s.img.naturalWidth : s.img.naturalHeight;
+    const alanG = Math.max(80, sahne.clientWidth), alanY = Math.max(80, sahne.clientHeight);
+    const olcek = Math.min(alanG / kaynakG, alanY / kaynakY);
+    tuval.width = Math.round(kaynakG * olcek);
+    tuval.height = Math.round(kaynakY * olcek);
+    const c = tuval.getContext('2d');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, tuval.width, tuval.height);
+    c.save();
+    c.translate(tuval.width / 2, tuval.height / 2);
+    if (d) c.rotate((d * Math.PI) / 180);
+    const cg = (d === 90 || d === 270) ? tuval.height : tuval.width;
+    const cy = (d === 90 || d === 270) ? tuval.width : tuval.height;
+    c.drawImage(s.img, -cg / 2, -cy / 2, cg, cy);
+    c.restore();
+    s.olcek = olcek;
+    s.secim = null;
+    $('#kutuSecim').hidden = true;
+  }
+
+  function kutuKapat() {
+    $('#katmanKutu').classList.remove('acik');
+    if (kutuDurum && kutuDurum.url) URL.revokeObjectURL(kutuDurum.url);
+    kutuDurum = null;
+  }
+
+  function kutuOlaylari() {
+    const sahne = $('#kutuSahne');
+    const kutu = $('#kutuSecim');
+    if (!sahne) return;
+    let bas = null;
+
+    const yerel = (olay) => {
+      const t = $('#kutuTuval').getBoundingClientRect();
+      return {
+        x: Math.min(Math.max(olay.clientX - t.left, 0), t.width),
+        y: Math.min(Math.max(olay.clientY - t.top, 0), t.height),
+        sol: t.left - sahne.getBoundingClientRect().left,
+        ust: t.top - sahne.getBoundingClientRect().top,
+      };
+    };
+    const goster = (a, b) => {
+      const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+      const g = Math.abs(a.x - b.x), yk = Math.abs(a.y - b.y);
+      kutu.hidden = false;
+      kutu.style.left = (a.sol + x) + 'px';
+      kutu.style.top = (a.ust + y) + 'px';
+      kutu.style.width = g + 'px';
+      kutu.style.height = yk + 'px';
+      return { x, y, g, yk };
+    };
+
+    sahne.addEventListener('pointerdown', (e) => {
+      if (!kutuDurum) return;
+      bas = yerel(e);
+      sahne.setPointerCapture(e.pointerId);
+      goster(bas, bas);
+    });
+    sahne.addEventListener('pointermove', (e) => {
+      if (!bas || !kutuDurum) return;
+      kutuDurum.secim = goster(bas, yerel(e));
+    });
+    const bitir = () => { bas = null; };
+    sahne.addEventListener('pointerup', bitir);
+    sahne.addEventListener('pointercancel', bitir);
+
+    $('#btnKutuKapat').addEventListener('click', kutuKapat);
+    $('#btnKutuIptal').addEventListener('click', kutuKapat);
+    $('#btnKutuDondur').addEventListener('click', () => {
+      if (!kutuDurum) return;
+      kutuDurum.derece = (kutuDurum.derece + 90) % 360;
+      kutuCiz();
+    });
+    $('#btnKutuOku').addEventListener('click', kutuyuOku);
+  }
+
+  async function kutuyuOku() {
+    const s = kutuDurum;
+    if (!s) return;
+    if (!s.secim || s.secim.g < 20 || s.secim.yk < 12) {
+      uyar('Önce adresin üstünü parmağınla kutu içine al.');
+      return;
+    }
+    const kayit = bekleyenKareler.get(s.kareId);
+    const derece = s.derece;
+    /* Ekran pikselinden ÇERÇEVE (döndürülmüş kaynak) pikseline. */
+    const kirp = {
+      x0: s.secim.x / s.olcek, y0: s.secim.y / s.olcek,
+      x1: (s.secim.x + s.secim.g) / s.olcek, y1: (s.secim.y + s.secim.yk) / s.olcek,
+    };
+    kutuKapat();
+    try {
+      bilgiGoster('Seçtiğin yer okunuyor…', true);
+      const okuma = await window.Ocr.oku(kayit.dosya, { kirp, derece });
+      if (!okuma.metin || okuma.metin.replace(/\s/g, '').length < 6) {
+        hataKartiGoster('Seçtiğin yerde yazı okunamadı. Biraz daha geniş bir alan seç ya da fotoğrafı yakından tekrar çek.', { dosya: kayit.ad });
+        return;
+      }
+      const parcalar = M.metin.belgeleriAyir(okuma.metin);
+      let eklendi = 0;
+      for (const p of parcalar) {
+        const r = await metniIsle(p, { ocrKelimeler: okuma.kelimeler });
+        if (r) { taramaSonucGoster(r); eklendi++; }
+      }
+      if (!eklendi) hataKartiGoster('Seçtiğin yerde adres bulunamadı.', { dosya: kayit.ad });
+      else bekleyenKareler.delete(s.kareId);
+    } catch (e) {
+      hataKartiGoster(e.message, { dosya: kayit.ad });
+    } finally {
+      bilgiGizle();
+    }
   }
 
   /**
@@ -831,16 +1215,22 @@
     kart.className = 'kart kirmizi';
     const rozet = bilgi && bilgi.dosya
       ? '<span class="rozet">' + kacis(bilgi.dosya) + '</span>' : '';
+    /* Fotoğrafın kendisi hâlâ elimizdeyse sürücüye "adresi göster" yolu
+       açılıyor — elle adres yazmaktan çok daha hızlı. */
+    const kutuDugmesi = bilgi && bilgi.kareId && bekleyenKareler.has(bilgi.kareId)
+      ? '<button class="dugme kucuk birincil" data-kutu="' + bilgi.kareId + '">📐 Adresi göster</button>' : '';
     kart.innerHTML =
       '<div class="sira">!</div>' +
       '<div class="govde">' +
         '<div class="ad">Fotoğraf okunamadı</div>' +
         '<div class="adres">' + kacis(mesaj) + '</div>' +
-        '<div class="alt">' + rozet +
+        '<div class="alt">' + rozet + kutuDugmesi +
           '<button class="dugme kucuk" data-kapat="1">Kapat</button>' +
         '</div>' +
       '</div>';
     kart.querySelector('[data-kapat]').addEventListener('click', () => kart.remove());
+    const kd = kart.querySelector('[data-kutu]');
+    if (kd) kd.addEventListener('click', () => kutuAc(kd.dataset.kutu));
     alan.prepend(kart);
     sayfaGoster('tara');
   }
