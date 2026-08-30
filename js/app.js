@@ -247,6 +247,33 @@
     return m ? parseInt(m[1], 10) : 1;
   }
 
+  /* ═══════════════════════════════════════════════════════════ depo ═══ */
+
+  /**
+   * ÇIKIŞ NOKTASI — kargoların alındığı yer.
+   *
+   * Kullanıcı: "Denizli'de Teraspark var, başlangıç durağı hep orası olacak
+   * çünkü kargolar oradan alınıp dağıtıma çıkılıyor."
+   *
+   * Koordinat OpenStreetMap'ten alındı (Teras Park AVM, Yenişehir Mahallesi,
+   * Merkezefendi). Faturalardaki "TERAS PARK AVM 55. SOKAK" adresi adres
+   * veritabanında sokak seviyesinde çözülüyor ve AVM binasından ~265 m
+   * sapıyordu; bina koordinatı daha doğru.
+   *
+   * Değiştirilebilir: depo taşınırsa ya da bu nokta tam tutmuyorsa sürücü
+   * Arşiv'den "bulunduğum yeri çıkış noktası yap" diyebiliyor.
+   */
+  const VARSAYILAN_DEPO = {
+    lat: 37.760175, lng: 29.042555,
+    ad: 'Teras Park AVM · Yenişehir Mh. / Merkezefendi',
+  };
+
+  async function depoAl() {
+    const kayitli = await D.ayarGetir('depo', null);
+    if (kayitli && typeof kayitli.lat === 'number' && typeof kayitli.lng === 'number') return kayitli;
+    return VARSAYILAN_DEPO;
+  }
+
   /* ═══════════════════════════════════════════════════════════ rota ═══ */
 
   /**
@@ -296,39 +323,42 @@
     const supheli = koordinatli.filter((d) => d.renk !== 'yesil').length;
     if (supheli && !sessiz && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
 
-    /* BAŞLANGIÇ = SÜRÜCÜNÜN O ANKİ KONUMU. Taze isteniyor, beklenmiyor değil.
-       Önbellekteki konum sabah evde alınmış olabilir; rota depodan değil
-       evden başlar ve bütün sıra kayar. */
-    let baslangic = null, baslangicKaynak = 'konum';
-    try {
-      if (!sessiz) bilgiGoster('Konumun alınıyor…', true);
-      /* Sessiz tazelemede önbellekteki konum yeterli: sürücü hâlâ fatura
-         okutuyor, yerinden kalkmamış. Her okutmada GPS'e gitmek pil yer. */
-      baslangic = await konumAl({ sure: sessiz ? 6000 : 10000, enFazlaYas: sessiz ? 120000 : 15000 });
-    } catch (e) {
-      /* Konum yoksa SESSİZCE ilk durağa düşmek yanlış rota üretiyordu.
-         Sürücüye ne olduğunu söyleyip kararı ona bırakıyoruz. */
-      bilgiGizle();
-      if (sessiz) {
-        /* Tazeleme sırasında konum yoksa eski başlangıç korunuyor; sıra
-           yine de tazeleniyor ki yeni duraklar dışarıda kalmasın. */
-        const r = durum.gun.rota;
-        if (r && r.baslangicLat != null) {
-          baslangic = { lat: r.baslangicLat, lng: r.baslangicLng };
-          baslangicKaynak = r.baslangicKaynak || 'onceki';
+    /* ═══ BAŞLANGIÇ NOKTASI ═══
+       Kargolar Teras Park'tan alınıp dağıtıma çıkılıyor; günün rotası da
+       oradan başlar. Bu yüzden İLK rota için anlık konum SORULMUYOR —
+       sürücü faturaları evde de okutsa, depoda da okutsa rota depodan çıkar.
+       Bunun yan faydası: konum izni/GPS olmadan da rota çıkıyor.
+
+       Gün içinde teslimat başladıysa depo artık doğru başlangıç değil;
+       sürücü yolda. O zaman anlık konum kullanılıyor, alınamazsa SON TESLİM
+       EDİLEN durak (oraya yakın olduğu kesin) — depoya dönmek yerine. */
+    const o = D.ozet(durum.gun);
+    const yolaCikildi = (o.teslim + o.basarisiz) > 0;
+    let baslangic = null, baslangicKaynak = 'depo';
+
+    if (!yolaCikildi) {
+      baslangic = await depoAl();
+      baslangicKaynak = 'depo';
+    } else {
+      try {
+        if (!sessiz) bilgiGoster('Konumun alınıyor…', true);
+        baslangic = await konumAl({ sure: sessiz ? 6000 : 10000, enFazlaYas: sessiz ? 120000 : 15000 });
+        baslangicKaynak = 'konum';
+      } catch (e) {
+        bilgiGizle();
+        /* Teslimat yapılmış duraklardan SONUNCUSU, sürücünün bulunduğu yere
+           en yakın bildiğimiz nokta. Depodan başlatmaktan çok daha doğru. */
+        const gidilen = D.siraliDuraklar(durum.gun)
+          .filter((d) => d.durum !== 'bekliyor' && d.lat != null);
+        if (gidilen.length) {
+          const son = gidilen[gidilen.length - 1];
+          baslangic = { lat: son.lat, lng: son.lng };
+          baslangicKaynak = 'son-teslimat';
+          if (!sessiz) uyar('Konum alınamadı — rota son teslim ettiğin adresten sıralandı.');
         } else {
-          baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
-          baslangicKaynak = 'ilk-durak';
+          baslangic = await depoAl();
+          baslangicKaynak = 'depo';
         }
-      } else {
-        const devam = confirm(
-          e.message + '\n\n' +
-          'Konum olmadan rota, İLK OKUTULAN ADRESTEN başlatılır ve sıra ' +
-          'bulunduğun yere göre olmaz.\n\n' +
-          'Yine de bu şekilde çıkarayım mı?');
-        if (!devam) { uyar('Rota çıkarılmadı — konum izni verip tekrar dene.'); return; }
-        baslangic = { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
-        baslangicKaynak = 'ilk-durak';
       }
     }
 
@@ -370,14 +400,12 @@
       bolunenGruplar: r.bolunenGruplar || [],
       baslangicLat: baslangic.lat, baslangicLng: baslangic.lng,
       baslangicKaynak, baslangicDogruluk: baslangic.dogruluk || null,
+      baslangicAd: baslangic.ad || null,
       matrisKaynak: matris ? 'ors' : 'kusucusu',
       toplamMetre: r.toplamMetre, toplamDakika: r.toplamDakika,
       yontem: r.yontem,
     });
     bilgiGizle();
-    if (baslangicKaynak === 'ilk-durak' && !sessiz) {
-      uyar('Rota, konum alınamadığı için ilk okutulan adresten başlatıldı.');
-    }
     if (!sessiz) sayfaGoster('bugun');
     ciz();
   }
@@ -606,11 +634,11 @@
     const r = durum.gun && durum.gun.rota;
     if (r) {
       if (r.baslangicKaynak === 'ilk-durak') {
+        /* Eski kayıtlarda kalmış olabilir; yeni rotalarda artık üretilmiyor. */
         parca.push(`<div class="uyari kirmizi">⚠ <div>
-          <b>Bu rota senin konumundan çıkarılmadı.</b>
-          Konum alınamadığı için ilk okutulan adres başlangıç sayıldı — sıra
-          bulunduğun yere göre değil.
-          <button class="dugme kucuk" data-eylem="rota" style="margin-top:6px">Konumla yeniden çıkar</button>
+          <b>Bu rota ne depodan ne senin konumundan çıkarıldı.</b>
+          İlk okutulan adres başlangıç sayılmış — sıra doğru olmayabilir.
+          <button class="dugme kucuk" data-eylem="rota" style="margin-top:6px">Yeniden çıkar</button>
         </div></div>`);
       } else if (r.baslangicLat != null) {
         const yas = r.zaman ? Math.round((Date.now() - new Date(r.zaman).getTime()) / 60000) : null;
@@ -643,10 +671,23 @@
              1 km'den fazla uzatıyordu.`
           : '';
 
+        /* Rota nereden başlatıldı? Sıra tartışmalı göründüğünde ilk
+           sorulacak soru bu. */
+        const baslangicYazi =
+          r.baslangicKaynak === 'depo'
+            ? `<b>${kacis(r.baslangicAd || 'çıkış noktası')}</b> (kargoları aldığın yer)`
+          : r.baslangicKaynak === 'son-teslimat'
+            ? '<b>son teslim ettiğin adres</b> (konum alınamadı)'
+            : `<b>bulunduğun konum</b>${r.baslangicDogruluk ? ` (±${Math.round(r.baslangicDogruluk)} m)` : ''}`;
+        /* Yol alındıysa depodan çıkarılmış rota bayatlar. */
+        const yolNotu = (r.baslangicKaynak === 'depo' && (o.teslim + o.basarisiz) > 0)
+          ? '<br><b>Teslimata başladın</b> — rotayı yenilersen kalan duraklar bulunduğun yere göre sıralanır.'
+          : (yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : '');
+
         parca.push(`<div class="uyari bilgi">🧭 <div>
-          Başlangıç: <b>bulunduğun konum</b>${r.baslangicDogruluk ? ` (±${Math.round(r.baslangicDogruluk)} m)` : ''}
+          Başlangıç: ${baslangicYazi}
           · ${r.matrisKaynak === 'ors' ? 'gerçek yol süresiyle' : 'kuş uçuşu tahminle'} sıralandı${yas != null && yas > 45 ? ` · ${yas} dk önce` : ''}.
-          ${yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : ''}${ilkNot}${bolunenNot}
+          ${yolNotu}${ilkNot}${bolunenNot}
         </div></div>`);
       }
     }
@@ -804,6 +845,17 @@
           ${g.rota ? `<br>${(g.rota.toplamMetre / 1000).toFixed(1)} km` : ''}</div>
       </div>`;
     }).join('') : '<div class="bos"><strong>Arşiv boş</strong>Kapanan günler burada birikir.</div>';
+
+    /* Çıkış noktası */
+    const depoYazisi = document.querySelector('#depoDurum');
+    if (depoYazisi) {
+      const dp = await depoAl();
+      const kendi = dp !== VARSAYILAN_DEPO;
+      depoYazisi.innerHTML =
+        `<b>${kacis(dp.ad || 'Çıkış noktası')}</b><br>` +
+        `<span style="font-size:12px;color:#5b6472">${dp.lat.toFixed(5)}, ${dp.lng.toFixed(5)}` +
+        (kendi ? ' · elle ayarlandı' : ' · varsayılan') + '</span>';
+    }
 
     /* Yol süresi ayarları */
     const anahtar = await D.ayarGetir('orsAnahtar', '');
@@ -992,6 +1044,26 @@
       await D.ayarYaz('orsAnahtar', null);
       document.querySelector('#orsAnahtar').value = '';
       uyar('Kaldırıldı — kuş uçuşuna dönüldü.');
+      cizArsiv();
+    });
+
+    const depoKonum = document.querySelector('#btnDepoKonum');
+    if (depoKonum) depoKonum.addEventListener('click', async () => {
+      try {
+        bilgiGoster('Konum alınıyor…', true);
+        const k = await konumAl({ sure: 12000, enFazlaYas: 0 });
+        bilgiGizle();
+        if (!confirm(`Çıkış noktası buraya ayarlansın mı?\n\n${k.lat.toFixed(5)}, ${k.lng.toFixed(5)}` +
+                     (k.dogruluk ? `\n(±${Math.round(k.dogruluk)} m)` : ''))) return;
+        await D.ayarYaz('depo', { lat: k.lat, lng: k.lng, ad: 'Kendi işaretlediğin nokta' });
+        uyar('Çıkış noktası güncellendi.');
+        cizArsiv();
+      } catch (e) { bilgiGizle(); uyar(e.message); }
+    });
+    const depoVars = document.querySelector('#btnDepoVarsayilan');
+    if (depoVars) depoVars.addEventListener('click', async () => {
+      await D.ayarYaz('depo', null);
+      uyar('Çıkış noktası Teras Park AVM olarak ayarlandı.');
       cizArsiv();
     });
 

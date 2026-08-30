@@ -2717,6 +2717,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830222223',
+    surum: '20260830223813',
   };
 })(typeof self !== 'undefined' ? self : this);
