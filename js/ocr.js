@@ -123,9 +123,18 @@
         c.fillRect(0, 0, t.width, t.height);
         c.drawImage(g, 0, 0, t.width, t.height);
 
+        /* BOŞ TUVAL İKİ FARKLI ŞEY OLABİLİR — karıştırmamak önemli:
+           (a) iOS belleği yetmedi ve sessizce boş tuval verdi → küçültüp
+               yeniden denemek işe yarar,
+           (b) fotoğrafın kendisi gerçekten boş/düz (beyaz kâğıt, kapak) →
+               küçültmenin faydası yok, kullanıcıya farklı şey söylenmeli.
+           Ayırt edici ölçüt kaynak görüntünün büyüklüğü: iOS'un bellek sınırı
+           ancak birkaç megapiksellik fotoğraflarda devreye giriyor. Küçük bir
+           görüntü boş çıktıysa gerçekten boştur. */
         if (tuvalBosMu(c, t.width, t.height)) {
           URL.revokeObjectURL(g.src);
-          hata(Object.assign(new Error('TUVAL_BOS'), { olcek }));
+          const buyukMu = g.naturalWidth * g.naturalHeight > 2.5e6;
+          hata(Object.assign(new Error(buyukMu ? 'TUVAL_BOS' : 'GORUNTU_BOS'), { olcek }));
           return;
         }
 

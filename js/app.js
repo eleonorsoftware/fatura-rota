@@ -21,6 +21,14 @@
      ancak o ilçeye teslimat okutulunca iniyor. */
   const ACILISTA = ['merkezefendi', 'pamukkale'];
 
+  /* iOS mu? Aşağıda iki yerde davranış değiştiriyor: kamera açma biçimi ve
+     ana ekrana ekleme ipucu. iPad'ler masaüstü kimliğiyle geldiği için
+     dokunma noktası sayısına da bakılıyor. */
+  const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const ANA_EKRANDA = window.navigator.standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches;
+
   const durum = {
     kaynak: null,
     gun: null,
@@ -56,10 +64,63 @@
     ilerle('Hazır');
 
     ilceSecenekleriDoldur();
+    kameraAyari();
+    kurulumIpucu();
     olaylariBagla();
     ciz();
     $('#yukleme').classList.add('bitti');
     konumIste();
+  }
+
+  /**
+   * iOS'ta `capture="environment"` ÖN KAMERAYI açıyor.
+   *
+   * Android'de bu öznitelik arka kamerayı doğrudan açıyor ve iyi çalışıyor.
+   * iOS Safari ise değeri güvenilir biçimde uygulamıyor: bazı sürümlerde
+   * yok sayıp son kullanılan kamerayı, çoğu zaman ön kamerayı açıyor —
+   * fatura çekmek için işe yaramaz.
+   *
+   * Çözüm: iOS'ta özniteliği tamamen kaldırmak. O zaman iOS kendi seçim
+   * penceresini açıyor ("Fotoğraf Çek / Fotoğraf Seç") ve "Fotoğraf Çek"
+   * denince NORMAL kamera uygulaması geliyor — arka kamera varsayılan,
+   * üstelik istenirse çevirme düğmesi de var.
+   */
+  function kameraAyari() {
+    if (!IOS) return;
+    const g = $('#girdiKamera');
+    if (g) g.removeAttribute('capture');
+    const d = $('#btnKamera');
+    if (d) d.textContent = '📷 Fotoğraf Çek / Seç';
+  }
+
+  /**
+   * iOS'ta "Ana Ekrana Ekle" nerede olduğunu gösterir.
+   *
+   * Safari'de bu seçenek Paylaş menüsünün ALTLARINDA ve aşağı kaydırmadan
+   * görünmüyor; ayrıca Chrome/başka bir tarayıcıda hiç yok. Kullanıcı
+   * bulamayınca uygulamayı kuramıyor.
+   */
+  function kurulumIpucu() {
+    if (!IOS || ANA_EKRANDA) return;
+    try { if (localStorage.getItem('kurulumIpucuKapandi')) return; } catch (_) {}
+
+    const safariMi = !/CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
+    const k = document.createElement('div');
+    k.className = 'uyari';
+    k.style.cssText = 'margin:0 0 10px;display:block;background:#dbeafe;color:#1e40af';
+    k.innerHTML = safariMi
+      ? '<b>📲 Ana ekrana ekle</b><br>Alttaki <b>Paylaş</b> düğmesine bas → listeyi ' +
+        '<b>aşağı kaydır</b> → <b>Ana Ekrana Ekle</b>. (Menünün altlarında, kaydırmadan görünmez.)' +
+        '<br><button class="dugme kucuk" data-ipucu-kapat="1" style="margin-top:8px">Anladım</button>'
+      : '<b>📲 Safari ile aç</b><br>Ana ekrana ekleme yalnız <b>Safari</b>\'de var. ' +
+        'Bu adresi Safari\'de açıp Paylaş → Ana Ekrana Ekle yap.' +
+        '<br><button class="dugme kucuk" data-ipucu-kapat="1" style="margin-top:8px">Anladım</button>';
+    k.querySelector('[data-ipucu-kapat]').addEventListener('click', () => {
+      try { localStorage.setItem('kurulumIpucuKapandi', '1'); } catch (_) {}
+      k.remove();
+    });
+    const hedef = $('#sayfa-bugun');
+    if (hedef) hedef.insertBefore(k, hedef.firstChild);
   }
 
   /** Metinde geçen ilçelerin verisini gerekirse indirir. */
