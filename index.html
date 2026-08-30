@@ -65,6 +65,23 @@
 <main class="sayfa" id="sayfa-arsiv">
   <div id="arsivListe"></div>
   <div id="hafizaOzet" style="margin-top:18px"></div>
+  <div class="kart" style="margin-top:12px;display:block">
+    <div class="ad" style="margin-bottom:6px">🛣️ Gerçek yol süresi</div>
+    <div class="adres" id="orsDurum">Şu an kuş uçuşu mesafeyle sıralanıyor.</div>
+    <label style="display:block;font-size:13px;color:#5b6472;margin:10px 0 4px;font-weight:600">OpenRouteService anahtarı</label>
+    <input id="orsAnahtar" placeholder="anahtarı buraya yapıştır" autocomplete="off"
+           style="width:100%;padding:12px;border:1px solid #e2e5ea;border-radius:10px;font:inherit;font-size:15px">
+    <div class="dugme-sirasi" style="margin-top:8px">
+      <button class="dugme kucuk birincil" id="btnOrsKaydet">Kaydet</button>
+      <button class="dugme kucuk" id="btnOrsSil">Kaldır</button>
+    </div>
+    <div class="adres" style="margin-top:10px;font-size:13px">
+      Ücretsiz, kredi kartı istemiyor, günde 500 istek (sen 1-3 kullanacaksın).<br>
+      <a href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>
+      adresinden kayıt ol → Dashboard → Request a token → Standard.
+    </div>
+    <div class="adres" id="orsAtif" style="margin-top:8px;font-size:11px"></div>
+  </div>
 </main>
 
 <!-- yüzen eylem -->

@@ -168,7 +168,31 @@
     if (supheli && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
 
     const baslangic = durum.konum || { lat: koordinatli[0].lat, lng: koordinatli[0].lng };
-    const r = M.rota.sirala(baslangic, koordinatli.map((d) => ({ lat: d.lat, lng: d.lng })));
+    const noktalar = koordinatli.map((d) => ({ lat: d.lat, lng: d.lng }));
+
+    /* GERÇEK YOL SÜRESİ varsa onunla, yoksa kuş uçuşuyla sırala.
+       Kuş uçuşu × 1,35 şehir içinde iyi iş görüyor ama Denizli'de arada dağ
+       var: Çivril 100 km ötede ve bazı mahalleler arasında kuş uçuşu 800 m
+       olan yol 3 km sürüyor. ORS anahtarı girilmişse gerçek süre alınıyor.
+       Ağ yoksa, kota dolmuşsa veya anahtar geçersizse SESSİZCE kuş uçuşuna
+       düşülüyor — rota her hâlükârda çıkıyor, sürücü yolda kalmıyor. */
+    let matris = null, birim = 'mesafe';
+    const anahtar = await D.ayarGetir('orsAnahtar', null);
+    if (anahtar && noktalar.length + 1 <= M.ors.AZAMI_NOKTA) {
+      try {
+        bilgiGoster('Gerçek yol süreleri alınıyor…', true);
+        matris = await M.ors.matrisAl([baslangic, ...noktalar], anahtar);
+        birim = 'sure';
+        bilgiGoster(matris.bosluk
+          ? `Yol süreleri geldi (${matris.bosluk} nokta yola bağlanmadı, tahmin edildi)`
+          : 'Yol süreleri geldi');
+      } catch (e) {
+        matris = null;
+        bilgiGoster('Yol süresi alınamadı (' + e.message + ') — kuş uçuşuyla sıralandı');
+      }
+    }
+
+    const r = M.rota.sirala(baslangic, noktalar, matris ? { matris, birim } : {});
     await D.rotaKaydet(durum.gun, r.sira.map((i) => koordinatli[i].id), {
       baslangicLat: baslangic.lat, baslangicLng: baslangic.lng,
       toplamMetre: r.toplamMetre, toplamDakika: r.toplamDakika,
@@ -408,6 +432,19 @@
       </div>`;
     }).join('') : '<div class="bos"><strong>Arşiv boş</strong>Kapanan günler burada birikir.</div>';
 
+    /* Yol süresi ayarları */
+    const anahtar = await D.ayarGetir('orsAnahtar', '');
+    const alan = document.querySelector('#orsAnahtar');
+    if (alan) alan.value = anahtar || '';
+    const durumYazisi = document.querySelector('#orsDurum');
+    if (durumYazisi) {
+      durumYazisi.textContent = anahtar
+        ? 'Gerçek yol süresi açık — rota gerçek sürüş süreleriyle sıralanıyor.'
+        : 'Şu an kuş uçuşu mesafeyle sıralanıyor. Anahtar girersen gerçek sürüş süreleri kullanılır.';
+    }
+    const atif = document.querySelector('#orsAtif');
+    if (atif) atif.textContent = anahtar ? M.ors.ATIF : '';
+
     const m = await D.musteriler();
     $('#hafizaOzet').innerHTML = `
       <div class="kart"><div class="govde">
@@ -538,6 +575,22 @@
     });
     ['dMahalle', 'dYol', 'dKapino', 'dIlce'].forEach((k) =>
       $('#' + k).addEventListener('change', duzeltDene));
+
+    const orsKaydet = document.querySelector('#btnOrsKaydet');
+    if (orsKaydet) orsKaydet.addEventListener('click', async () => {
+      const v = (document.querySelector('#orsAnahtar').value || '').trim();
+      if (v && !M.ors.anahtarGecerliMi(v)) { uyar('Bu anahtar geçerli görünmüyor — tamamını yapıştırdığından emin ol.'); return; }
+      await D.ayarYaz('orsAnahtar', v || null);
+      uyar(v ? 'Kaydedildi. Bundan sonraki rotalar gerçek yol süresiyle çıkacak.' : 'Kaldırıldı.');
+      cizArsiv();
+    });
+    const orsSil = document.querySelector('#btnOrsSil');
+    if (orsSil) orsSil.addEventListener('click', async () => {
+      await D.ayarYaz('orsAnahtar', null);
+      document.querySelector('#orsAnahtar').value = '';
+      uyar('Kaldırıldı — kuş uçuşuna dönüldü.');
+      cizArsiv();
+    });
 
     /* Uygulamaya dönüldüğünde varış kontrolü — Google Maps'ten dönüş anı. */
     document.addEventListener('visibilitychange', () => {

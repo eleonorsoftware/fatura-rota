@@ -1745,12 +1745,144 @@ module.exports = {
 
   };
 
+  kayit['./ors'] = function (module, exports, require) {
+'use strict';
+/**
+ * GERÇEK YOL SÜRESİ — OpenRouteService
+ * ====================================
+ *
+ * Rota sıralaması varsayılan olarak kuş uçuşu mesafeyi × 1,35 kullanıyor.
+ * Yoğun bir şehir içi turda bu yeterli sıralamayı veriyor, ama Denizli'nin
+ * coğrafyası buna hep uymuyor: Çivril 100 km ötede ve arada dağ var,
+ * bazı mahalleler arasında kuş uçuşu 800 m olan yol 3 km sürüyor.
+ * Gerçek yol süresi bu durumlarda sırayı belirgin biçimde düzeltiyor.
+ *
+ * NEDEN ORS
+ * ---------
+ * Araştırıldı ve ölçüldü (2026-08-30):
+ *   - Tek istekte 3.500 nokta çifti → 59 durak + başlangıç TEK çağrıya sığıyor.
+ *     Mapbox'ta 25 koordinat tavanı var, aynı iş ~20 parçalı istek demek.
+ *   - Günde 500 istek ücretsiz; günlük ihtiyaç 1-3. Kullanım oranı %0,6.
+ *   - KREDİ KARTI İSTEMİYOR. Kota aşılırsa ücret değil hata dönüyor —
+ *     "sıfır maliyet" şartı için kusur değil, özellik.
+ *   - Ticari kullanım serbest (GraphHopper'ın ücretsiz planı değil,
+ *     HERE rota optimizasyonunu sözleşmeyle yasaklıyor).
+ *
+ * ⚠️ KİŞİSEL VERİ GÖNDERİLMEZ
+ * ORS kullanım şartları "Transmit personal data" maddesiyle bunu yasaklıyor.
+ * Bu dosya YALNIZ [boylam, enlem] çiftleri gönderiyor — isim, telefon,
+ * açık adres, belge numarası hiçbir zaman ağa çıkmıyor.
+ *
+ * ⚠️ ATIF ZORUNLU
+ * Ekranda ya da hakkında bölümünde:
+ *   "© openrouteservice by HeiGIT | Data from OpenStreetMap"
+ *
+ * ANAHTAR NASIL ALINIR (ücretsiz, kart yok)
+ *   1. openrouteservice.org/dev/#/signup  → kayıt ol
+ *   2. Dashboard > Request a token > "Standard" planı seç
+ *   3. Anahtarı uygulamada Arşiv > Yol süresi bölümüne yapıştır
+ */
+
+const UC = 'https://api.openrouteservice.org/v2/matrix/driving-car';
+
+/* Tek istekte izin verilen azami nokta çifti. 59×59 = 3.481 ≤ 3.500. */
+const AZAMI_NOKTA = 59;
+
+/**
+ * Yol süresi matrisi alır.
+ *
+ * @param {Array<{lat:number,lng:number}>} noktalar  0. eleman başlangıç
+ * @param {string} anahtar   ORS API anahtarı
+ * @param {object} [secenek]
+ *   @param {function} [secenek.getir]  fetch yerine geçecek işlev (test için)
+ *   @param {'sure'|'mesafe'} [secenek.birim]  varsayılan 'sure' (saniye)
+ * @returns {Promise<number[][]>}  n×n matris
+ * @throws  ağ/kota/anahtar hatalarında — çağıran kuş uçuşuna düşmeli
+ */
+async function matrisAl(noktalar, anahtar, secenek = {}) {
+  if (!anahtar) throw new Error('ORS anahtarı yok');
+  if (!noktalar || noktalar.length < 2) throw new Error('En az iki nokta gerekli');
+  if (noktalar.length > AZAMI_NOKTA) {
+    /* 59'dan fazla durak bu ucun tek istekte kaldırabileceğinden çok.
+       Parçalayıp birleştirmek mümkün ama gerçek bir günde 59 durağı aşmak
+       nadir; şimdilik açıkça hata verip kuş uçuşuna düşülüyor — sessizce
+       yanlış bir matris üretmektense. */
+    throw new Error(`ORS tek istekte en fazla ${AZAMI_NOKTA} nokta alıyor (${noktalar.length} verildi)`);
+  }
+
+  const getir = secenek.getir || (typeof fetch !== 'undefined' ? fetch : null);
+  if (!getir) throw new Error('fetch yok');
+
+  const olcut = secenek.birim === 'mesafe' ? 'distance' : 'duration';
+  const yanit = await getir(UC, {
+    method: 'POST',
+    headers: {
+      'Authorization': anahtar,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      /* ORS [boylam, enlem] istiyor — enlem/boylam sırası ters.
+         Bu, ORS ile çalışırken en sık yapılan hata; karıştırılırsa
+         koordinatlar Afrika kıyısına düşer ve matris anlamsız çıkar. */
+      locations: noktalar.map((n) => [n.lng, n.lat]),
+      metrics: [olcut],
+      units: 'm',
+    }),
+  });
+
+  if (!yanit.ok) {
+    const govde = await yanit.text().catch(() => '');
+    if (yanit.status === 403) throw new Error('ORS anahtarı geçersiz veya günlük kota doldu');
+    if (yanit.status === 429) throw new Error('ORS hız sınırı — biraz sonra tekrar dene');
+    throw new Error(`ORS hatası ${yanit.status}: ${govde.slice(0, 120)}`);
+  }
+
+  const veri = await yanit.json();
+  const matris = olcut === 'duration' ? veri.durations : veri.distances;
+  if (!Array.isArray(matris) || matris.length !== noktalar.length) {
+    throw new Error('ORS beklenmeyen yanıt verdi');
+  }
+
+  /* ORS ulaşılamayan noktalar için null döndürüyor (yol ağına bağlanmayan
+     bir kapı, ada üzerinde bir nokta vb.). Sıralayıcı sayı bekliyor;
+     bu hücreler kuş uçuşuyla dolduruluyor ki tek bir erişilemez durak
+     bütün rotayı bozmasın. */
+  let bosluk = 0;
+  for (let i = 0; i < matris.length; i++) {
+    for (let j = 0; j < matris[i].length; j++) {
+      if (typeof matris[i][j] === 'number') continue;
+      bosluk++;
+      const m = kusUcusu(noktalar[i], noktalar[j]) * 1.35;
+      matris[i][j] = olcut === 'duration' ? m / 1000 / 25 * 3600 : m;
+    }
+  }
+  return Object.assign(matris, { bosluk, birim: olcut === 'duration' ? 'sure' : 'mesafe' });
+}
+
+function kusUcusu(a, b) {
+  const R = 6371000, d = Math.PI / 180;
+  const x = (b.lat - a.lat) * d, y = (b.lng - a.lng) * d;
+  const h = Math.sin(x / 2) ** 2 + Math.cos(a.lat * d) * Math.cos(b.lat * d) * Math.sin(y / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** Anahtar biçimsel olarak makul mü? (yanlış yapıştırmayı erken yakalar) */
+function anahtarGecerliMi(a) {
+  return typeof a === 'string' && /^[A-Za-z0-9._-]{30,}$/.test(a.trim());
+}
+
+module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openrouteservice by HeiGIT | Data from OpenStreetMap' };
+
+  };
+
   global.Motor = {
     metin: require('./metin'),
     adres: require('./adres'),
     kaynakPaket: require('./kaynak-paket'),
     fatura: require('./fatura'),
     rota: require('./rota'),
-    surum: '20260830183124',
+    ors: require('./ors'),
+    surum: '20260830184649',
   };
 })(typeof self !== 'undefined' ? self : this);
