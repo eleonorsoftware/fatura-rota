@@ -1979,11 +1979,20 @@ function sirala(baslangic, duraklar, secenek = {}) {
      "ilk durak olarak 2., 3., 4. en yakını seç" varyantları da deneniyor;
      hepsi yerel iyileştirmeden geçip en iyisi alınıyor. Ucuz ve tek
      başlangıcın sistematik körlüğünü kırıyor. */
+  const sureTavaniBas = secenek.sureTavani != null ? secenek.sureTavani : 1200;
+  const anBaslangic = Date.now();
+
+  /* Durak sayısı büyüdükçe her tohum pahalılaşıyor (yerel iyileştirme O(n³)).
+     50 durakta dört tohum tek başına saniyeleri buluyor; telefonda bu
+     düğmeye bastıktan sonra beklenen süre demek. Tohum sayısı ölçeğe göre
+     kısılıyor ve süre tavanı BURADA DA geçerli. */
+  const tohumSayisi = N <= 20 ? 4 : N <= 35 ? 3 : 2;
   const tohumlar = [enYakinKomsu(m)];
-  for (let k = 1; k <= Math.min(3, N - 1); k++) tohumlar.push(enYakinKomsu(m, k));
+  for (let k = 1; k <= Math.min(tohumSayisi - 1, N - 1); k++) tohumlar.push(enYakinKomsu(m, k));
 
   let enIyi = null, enIyiMaliyet = Infinity;
   for (const t of tohumlar) {
+    if (enIyi && Date.now() - anBaslangic > sureTavaniBas * 0.6) break;
     const s = yerelIyilestir(t.slice(), m);
     const c = maliyet(s, m);
     if (c < enIyiMaliyet) { enIyiMaliyet = c; enIyi = s; }
@@ -2001,12 +2010,10 @@ function sirala(baslangic, duraklar, secenek = {}) {
      değil GEÇEN SÜRE sınırlanıyor: küçük günlerde turların hepsi çalışıyor,
      büyük günlerde elde olan en iyi rotayla yetiniliyor (sonuç asla
      kötüleşmiyor, yalnız arama kısalıyor). */
-  const sureTavani = secenek.sureTavani != null ? secenek.sureTavani : 1200;
-  const baslangicAn = Date.now();
   const rast = uretec(N * 7919 + Math.round((m[0][1] || 1) * 1000));
   let tur = 0;
   for (; tur < turSayisi; tur++) {
-    if (Date.now() - baslangicAn > sureTavani) break;
+    if (Date.now() - anBaslangic > sureTavaniBas) break;
     const aday = yerelIyilestir(ciftKopru(enIyi, rast), m);
     const c = maliyet(aday, m);
     if (c < enIyiMaliyet - 1e-9) { enIyiMaliyet = c; enIyi = aday; }
@@ -2613,6 +2620,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830213800',
+    surum: '20260830215516',
   };
 })(typeof self !== 'undefined' ? self : this);
