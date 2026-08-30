@@ -547,6 +547,7 @@
                                : '<span class="rozet yesil">yeni durak</span>'}
           ${d.renk !== 'yesil' ? `<span class="rozet ${d.renk}">${d.renk === 'kirmizi' ? 'okunamadı' : 'kontrol et'}</span>` : ''}
           <button class="dugme kucuk" data-eylem="duzelt" data-id="${d.id}">Düzelt</button>
+          <button class="dugme kucuk kirmizi" data-eylem="durakSil" data-id="${d.id}">Sil</button>
         </div>
       </div>`;
     alan.prepend(kart);
@@ -677,6 +678,19 @@
         }
         case 'duzelt': duzeltAc(id); break;
         case 'ac': duzeltAc(id); break;
+        /* Yanlış okunan bir kareyi düzeltme penceresini açmadan, olduğu
+           yerden silmek için. Tarama ekranında hemen fark edilip atılıyor. */
+        case 'durakSil': {
+          const d = durum.gun.duraklar.find((x) => x.id === id);
+          const etiket = d ? (d.ad || adresYaz(d)) : 'Bu durak';
+          if (!confirm(`${etiket}\n\nBu durak silinsin mi?`)) break;
+          await D.durakSil(durum.gun, id);
+          const kart = h.closest('.kart');
+          if (kart) kart.remove();
+          ciz();
+          bilgiGoster('Durak silindi.');
+          break;
+        }
         case 'gunKapat':
           if (confirm('Günü kapatayım mı?\nBugünün kaydı arşive geçer, yeni liste yarın sabah boş başlar.')) {
             await D.gunKapat(durum.gun.tarih);

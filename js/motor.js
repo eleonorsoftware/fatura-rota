@@ -273,13 +273,37 @@ function kapiNoBul(metin) {
  * Mahalle+yol kara listesi bunu yakalayamıyor, çünkü buradan sızan tek şey
  * NUMARA. O yüzden satır bazında eleniyor.
  */
-const GONDERICI_SATIR = /media\s*markt|kağıthane|kagithane|i̇stanbul|istanbul|büyükdere|buyukdere|teras\s*park|marmara\s*kurumlar|chamber\s*of\s*commerce|ticaret\s*sicil/i;
+/* Belirteçler ÇOK SÖZCÜKLÜ ve göndericiye özgü seçildi.
+   İlk sürümde tek başına "büyükdere" vardı ve bu, içinde o sözcük geçen
+   HER satırı siliyordu — müşterinin adresi öyle bir sokakta olsaydı kapı
+   numarası sessizce kaybolurdu. Tek sözcüklü, genel bir yer adını buraya
+   koymak bu yüzden tehlikeli: eleme satırın tamamını götürüyor. */
+/* Karşılaştırma SADELEŞTİRİLMİŞ metin üzerinde yapılıyor, ham metin üzerinde
+   değil. Sebebi Türkçe'nin klasik tuzağı: JavaScript'te "ESKİ".toLowerCase()
+   noktalı bir i üretiyor ve `/eski/i` deseniyle EŞLEŞMİYOR. İlk sürümde
+   desenler ham metne uygulanıyordu ve "ESKİ BÜYÜKDERE", "YEŞİLCE" gibi
+   büyük harfli başlıklar hiç yakalanmıyordu. */
+const GONDERICI_BELIRTECLERI = [
+  'media markt',
+  'eski buyukdere',        // genel merkez caddesi — iki sözcük birlikte
+  'yesilce mah',           // genel merkez mahallesi
+  'kagithane',
+  'marmara kurumlar',
+  'teras park avm',
+  'chamber of commerce',
+  'ticaret sicil',
+];
+
+function gondericiSatiriMi(satir) {
+  const s = sade(satir);
+  return GONDERICI_BELIRTECLERI.some((b) => s.includes(b));
+}
 
 function kapiNoAdaylari(metin) {
   if (!metin) return [];
   /* Gönderici satırları baştan atılıyor. Satır satır bakılıyor çünkü
      gönderici bilgisi belgenin başında kendi satırlarında duruyor. */
-  metin = String(metin).split(/\r?\n/).filter((s) => !GONDERICI_SATIR.test(s)).join('\n');
+  metin = String(metin).split(/\r?\n/).filter((s) => !gondericiSatiriMi(s)).join('\n');
   const a = [];
   const ekle = (v) => {
     if (!v) return;
@@ -1950,6 +1974,6 @@ module.exports = { matrisAl, anahtarGecerliMi, AZAMI_NOKTA, UC, ATIF: '© openro
     fatura: require('./fatura'),
     rota: require('./rota'),
     ors: require('./ors'),
-    surum: '20260830193924',
+    surum: '20260830195002',
   };
 })(typeof self !== 'undefined' ? self : this);
