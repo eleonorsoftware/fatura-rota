@@ -1012,7 +1012,7 @@ function uzakliktanPuan(m) {
  * Dönen `keskinlik`: 'kapi' | 'yol' | 'mahalle' | 'yok'
  * Dönen `guven`   : 0-100. `renk` alanı bunu yeşil/sarı/kırmızıya çevirir.
  */
-function coz(kaynak, { ilce, mahalle, yol, kapino } = {}) {
+function coz(kaynak, { ilce, mahalle, yol, kapino, bagiYokSay } = {}) {
   const sonuc = {
     lat: null, lng: null, keskinlik: 'yok', guven: 0, renk: 'kirmizi',
     ilce: null, mahalle: null, yol: null, kapino: null,
@@ -1078,7 +1078,43 @@ function coz(kaynak, { ilce, mahalle, yol, kapino } = {}) {
     return son(sonuc);
   }
 
-  const sirali = k.kapilar
+  /* ══ KAPI ↔ SOKAK BAĞI ══
+     Belediyenin kendi kaydında her kapının hangi sokağa ait olduğu yazılı
+     (Numarataj → Yol Orta Hat Yön → Yol Orta Hat). Bu bağ elimizdeki
+     kopyaya `veri/kapi-yol-bagla.js` ile alındı.
+
+     Bağ VARSA tahmin etmeye gerek yok: mahalledeki aynı numaralı kapılar
+     arasından SOKAĞA KAYITLI olanı seçiliyor. Önceki yöntem — sokak
+     çizgisine en yakın kapıyı seçmek — merkez mahallelerde sokaklar
+     sıklaştığında şansa kalıyordu: aynı numaradan onlarca kapı ve
+     aralarında birkaç metre fark.
+
+     Bağ YOKSA (belediye verisinde boş olan kapılar) eski yönteme
+     düşülüyor; sonuç aynen eskisi gibi çalışıyor. */
+  const yolOidleri = new Set(y.yollar.map((w) => w.objectid));
+  /* SOKAK ADIYLA DA DOĞRULA — mahalle sınırı tuzağı.
+     Ölçülmüş gerçek örnek: Kuşpınar'da 96 numaralı kapı, İNÖNÜ caddesine
+     bağlı; ama bağlandığı İNÖNÜ PARÇASI komşu MEHMETÇİK mahallesinde
+     kayıtlı. Uzun caddeler mahalle sınırında bölünüyor ve kapı,
+     kendi mahallesinde olmayan bir parçaya bağlanabiliyor.
+     Yalnız oid'e bakılsaydı bu doğru bağ "başka sokak" sayılırdı. */
+  const hedefAdlar = new Set(y.yollar.map((w) => sade(w.ad_ara || w.ad)));
+  const bagUyuyor = (kp) => {
+    if (kp.yolOid == null) return false;
+    if (yolOidleri.has(kp.yolOid)) return true;
+    const b = kaynak.yolBilgi ? kaynak.yolBilgi(kp.yolOid) : null;
+    return !!(b && hedefAdlar.has(sade(b.adAra || b.ad)));
+  };
+  /* `bagiYokSay` yalnız ÖLÇÜM için: eski davranışı birebir yeniden
+     üretebilmek gerekiyor (bkz. test/kapi-yol-olcum.js). Uygulamada
+     hiçbir yerde kullanılmıyor. */
+  const bagliKapilar = bagiYokSay ? [] : k.kapilar.filter(bagUyuyor);
+  const bagliVar = bagliKapilar.length > 0;
+  /* Bu numarada bağ bilgisi taşıyan kapı var mı? Varsa ama hiçbiri BU
+     sokağa bağlı değilse, bu "bulamadım" değil "burada değil" demektir. */
+  const baskaSokagaBagli = !bagiYokSay && !bagliVar && k.kapilar.some((kp) => kp.yolOid != null);
+
+  const sirali = (bagliVar ? bagliKapilar : k.kapilar)
     .map((kp) => ({ ...kp, uzaklik: cizgiyeMesafe(kp.lat, kp.lng, cizgiler) }))
     .sort((a, b) => a.uzaklik - b.uzaklik);
 
@@ -1119,6 +1155,49 @@ function coz(kaynak, { ilce, mahalle, yol, kapino } = {}) {
   /* Ama aday çokluğu TEK BAŞINA kötü değil: en yakın olan diğerlerinden
      belirgin biçimde öndeyse seçim yine nettir. Ceza yalnız sıkışık
      durumlarda uygulanır. */
+  /* ══ BAĞ VARSA KALABALIK CEZALARI GEÇERSİZ ══
+     Aşağıdaki "aynı numaradan kaç kapı var" cezaları, hangi kapının doğru
+     olduğunu bilmemenin cezasıydı. Belediye kaydı bunu söylüyorsa
+     kalabalığın bir önemi kalmıyor: mahallede "13" numaradan 36 kapı olsa
+     da bu sokağa kayıtlı olan belli. */
+  if (bagliVar) {
+    sonuc.bagliSokak = true;
+    /* Puan sıfırdan kuruluyor — yukarıdaki mesafe temelli puanla
+       karıştırılmıyor, yoksa aynı cezalar iki kez işlenirdi.
+       Taban 95: belediye kaydı bu kapının bu sokakta olduğunu söylüyor.
+       Mesafe artık delil değil; sokak çizgisi kısa bir parça olduğu için
+       kapı uzakta görünebilir, bağ yine doğrudur.
+       Ama sokak ADI zorlanarak eşleştiyse bağ da yanlış sokağı gösterir —
+       o cezalar duruyor. */
+    let bagliPuan = 95;
+    bagliPuan -= { tam: 0, onek: 4, icerik: 8, 'ortak-sozcuk': 6, bulanik: 18 }[y.eslesme] ?? 8;
+    if (k.eslesme === 'taban') {
+      bagliPuan -= 8;
+      sonuc.notlar.push(`Kapı no "${kapino}" bulunamadı, taban numara "${en.kapino}" kullanıldı`);
+    }
+    if (m.eslesme === 'bulanik') bagliPuan -= 10;
+    if (m.adaylar.length > 1) bagliPuan -= 25;
+    if (bagliKapilar.length > 1) {
+      /* Aynı sokakta aynı numaradan birden çok kayıt — veri anomalisi.
+         Nadir ama olabiliyor; o zaman yine mesafe hakem. */
+      bagliPuan -= 10;
+      sonuc.notlar.push(`Bu sokakta "${en.kapino}" numaralı ${bagliKapilar.length} kayıt var — en yakını seçildi`);
+    }
+    sonuc.guven = Math.max(0, Math.min(100, Math.round(bagliPuan)));
+    return son(sonuc);
+  }
+
+  /* Kapı numarası bu mahallede var ama BAŞKA sokaklara kayıtlı. Bu, zayıf
+     bir eşleşme değil, aksi yönde bir delil: aradığımız kapı bu sokakta
+     görünmüyor. Sonucu yeşile çıkarmamak gerekiyor. */
+  if (baskaSokagaBagli) {
+    puan -= 22;
+    sonuc.baskaSokagaBagli = true;
+    sonuc.notlar.push(
+      `"${kapino}" numarası bu mahallede var ama kayıtlarda "${sonuc.yol}" sokağına bağlı değil — ` +
+      'sokak adı yanlış okunmuş olabilir, kontrol et');
+  }
+
   const acik = sirali.length > 1 ? sirali[1].uzaklik - en.uzaklik : Infinity;
   if (acik < 30) {
     if (sirali.length >= 5) puan -= 12;
@@ -1226,7 +1305,7 @@ module.exports = {
  * `lib/kaynak-sqlite.js` ile BİREBİR AYNI arayüzü sunar. Böylece eşleştirme
  * mantığı (lib/adres.js) hiç değişmeden tarayıcıda da çalışıyor.
  *
- * Toplam paket 7,2 MB; merkez iki ilçe 1,6 MB. İlçe dosyaları İSTENDİĞİNDE
+ * Toplam paket 8,2 MB; merkez iki ilçe 1,9 MB. İlçe dosyaları İSTENDİĞİNDE
  * yükleniyor — sürücü Çivril'e teslimat okutmadıkça Çivril verisi hiç inmiyor.
  *
  * TARAYICI VE NODE
@@ -1239,8 +1318,12 @@ module.exports = {
  *   ilce.json      : [[oid, ad, adAra], …]
  *   mahalle.json   : [[oid, ad, adAra, ilceOid, minLat, minLng, maxLat, maxLng], …]
  *   yol-<ilce>.json: [[mahOid, ad, adAra, tur, [[[lat,lng],…], …]], …]
- *   kapi-<ilce>.json:[[mahOid, kapinoAra, lat, lng], …]
+ *   kapi-<ilce>.json:[[mahOid, kapino, lat, lng, yolSira], …]
  *   Koordinatlar tam sayı: derece × 1e6.
+ *   `yolSira` = kapının bağlı olduğu sokağın, aynı ilçenin yol dizisindeki
+ *   sıra numarası (-1 = bağ yok). Gerçek objectid saklanmıyor çünkü pakette
+ *   aynı adlı yol parçaları birleştiriliyor; yükleyici oid'leri aynı sırada
+ *   ürettiği için sıra numarası birebir tutuyor.
  */
 
 const { sade } = require('./metin');
@@ -1261,6 +1344,7 @@ function olustur({ oku }) {
   const _mahIndeks = new Map();          // mahOid -> mahalle
   const _yukluIlce = new Set();          // yüklenmiş ilçe oid'leri
   const _yolMah = new Map();             // mahOid -> [yol]
+  const _yolIndeks = new Map();          // yolOid -> yol (kapı bağı için)
   const _cizgi = new Map();              // yolOid -> [[[lat,lng],…], …]
   const _kapiMah = new Map();            // mahOid -> Map(kapinoAra -> [kapı])
   let _sonrakiYolOid = 1;
@@ -1287,22 +1371,32 @@ function olustur({ oku }) {
     await dizinleriYukle();
 
     const yollar = await oku(`yol-${ilceOid}`);
+    /* Bu ilçenin ilk yol oid'i. Kapılar sokağı SIRA NUMARASIYLA gösteriyor
+       (pakette gerçek objectid'ler yok, bkz. veri/paket-uret.js); sıra
+       numarası + bu taban = oid. İkisi aynı dizide üretildiği için tutuyor. */
+    const yolTabanOid = _sonrakiYolOid;
     for (const [mahOid, ad, adAra, tur, cizgiler] of yollar) {
       const oid = _sonrakiYolOid++;
       const kayit = { oid, ad, adAra, tur, mahOid };
       if (!_yolMah.has(mahOid)) _yolMah.set(mahOid, []);
       _yolMah.get(mahOid).push(kayit);
+      _yolIndeks.set(oid, kayit);
       _cizgi.set(oid, cizgiler.map((c) => c.map(([la, ln]) => [coz(la), coz(ln)])));
     }
 
     const kapilar = await oku(`kapi-${ilceOid}`);
-    for (const [mahOid, kapino, lat, lng] of kapilar) {
+    for (const [mahOid, kapino, lat, lng, yolSira] of kapilar) {
       if (!_kapiMah.has(mahOid)) _kapiMah.set(mahOid, new Map());
       const m = _kapiMah.get(mahOid);
       /* Arama anahtarı sadeleştirilmiş, gösterilen değer özgün. */
       const anahtar = sade(kapino);
       if (!m.has(anahtar)) m.set(anahtar, []);
-      m.get(anahtar).push({ kapino, lat: coz(lat), lng: coz(lng) });
+      m.get(anahtar).push({
+        kapino, lat: coz(lat), lng: coz(lng),
+        /* -1 ya da eksik = belediye kaydında bağ yok. Eski paketlerde bu
+           alan hiç bulunmuyor; undefined da bağsız sayılıyor. */
+        yolOid: (yolSira == null || yolSira < 0) ? null : yolTabanOid + yolSira,
+      });
     }
     _yukluIlce.add(ilceOid);
   }
@@ -1339,6 +1433,11 @@ function olustur({ oku }) {
     },
 
     yollar: (mahalleOid) => _yolMah.get(mahalleOid) || [],
+
+    /* Bir yolun kimliği — kapının bağlı olduğu sokağın ADINI öğrenmek için.
+       Uzun caddeler mahalle sınırında bölünüyor ve kapı, komşu mahallede
+       kayıtlı bir parçaya bağlanabiliyor; bağ o yüzden adla da doğrulanıyor. */
+    yolBilgi: (oid) => _yolIndeks.get(oid) || null,
 
     cizgiler: (oidListesi) => {
       const harita = new Map();
@@ -2717,6 +2816,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830223813',
+    surum: '20260830230457',
   };
 })(typeof self !== 'undefined' ? self : this);
