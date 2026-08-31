@@ -447,7 +447,63 @@ function yolAdaylari(sadeAyrik, ham, capa) {
     }
     if (hepsi.length >= 12) break;          // kombinasyon patlamasın
   }
-  return egikSayiliDuzelt(hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik, capa), ham);
+  let sonuc = hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik, capa);
+
+  /* "Apt:"IN SOLUNDAKİ SÖZCÜK SOKAKTIR — her iki belge biçiminde de.
+     Bunlar sona ekleniyor: ek taşıyan adaylar varsa onlar önce denensin,
+     yoksa tek kaynak bu olsun. */
+  for (const b of yolAdaylariBinaOncesi(kelimeler)) {
+    if (!sonuc.includes(b)) sonuc.push(b);
+    if (sonuc.length >= 14) break;
+  }
+  return egikSayiliDuzelt(sonuc, ham);
+}
+
+/**
+ * SOKAK ADI "Apt:" İŞARETİNİN SOLUNDA — yeni belge biçimi.
+ *
+ * 2026-08-31'de gelen faturalar bambaşka bir düzende basılıyor ve adres
+ * satırının sırası TERS:
+ *
+ *     Teslimat Adresi:
+ *     mustafa genç
+ *     1841 Apt: 11 D: 1 K: 1        ← sokak, kapı, daire, kat
+ *     Merkez Efendi Mh.             ← MAHALLE BİR SONRAKİ SATIRDA
+ *     20010 Denizli
+ *
+ * Eski e-İrsaliyede sokak mahalleden SONRA geliyordu ("Pınarkent Mh.53
+ * sokak Apt: 23"); ayıklayıcı da mahalle ekinden sonrasına bakıyordu.
+ * Yeni biçimde mahalleden sonra yalnız posta kodu var, sokak hiç
+ * bulunamıyordu — 19 faturanın hepsinde sokak boş kalıyordu.
+ *
+ * Ortak kural: İKİ BİÇİMDE DE sokak "Apt:" işaretinin hemen solunda.
+ *     yeni : "1841 Apt: 11"          → 1841
+ *     eski : "53 sokak Apt: 23"      → 53   (yol eki atlanıyor)
+ * Geriye doğru yürünüyor; mahalle eki, numara/daire/kat işaretleri ve
+ * gürültü sözcükleri sınır. Alıcı adı da yürüyüşe girebiliyor ("mustafa
+ * genç 1841") ama en kısa aday önce denendiği ve gazetteer'da olmayan
+ * adlar elendiği için sorun çıkarmıyor.
+ */
+function yolAdaylariBinaOncesi(kelimeler) {
+  const sinir = new Set([...EK.mahalle, ...EK.numara, ...EK.daire, ...EK.kat, ...GURULTU]);
+  const cikan = [];
+  for (let i = 0; i < kelimeler.length; i++) {
+    if (!ekMi(kelimeler[i], EK.bina)) continue;
+    const alinan = [];
+    for (let j = i - 1; j >= 0 && alinan.length < 3; j--) {
+      const k = kelimeler[j];
+      if (sinir.has(k) || ekMi(k, EK.bina)) break;
+      if (ekMi(k, EK.yol)) continue;        // "sokak"/"cd" adın parçası değil
+      if (/^\d{5}$/.test(k)) break;         // posta kodu
+      alinan.unshift(k);
+    }
+    /* En kısa (Apt:'a en yakın) aday önce — sokak orada. */
+    for (let n = 1; n <= alinan.length; n++) {
+      const ad = alinan.slice(alinan.length - n).join(' ');
+      if (ad && !cikan.includes(ad)) cikan.push(ad);
+    }
+  }
+  return cikan;
 }
 
 /**
@@ -1151,6 +1207,36 @@ function coz(kaynak, { ilce, mahalle, yol, kapino, bagiYokSay } = {}) {
        (kırmızı/sarı) döner; sürücü onaylar. */
     if (ilce) return ilceGenelinde(kaynak, ilce, yol, kapino, sonuc);
     return sonuc;
+  }
+  /* ══ MAHALLE ADI BİRDEN ÇOK İLÇEDE VARSA HEPSİNİ DENE ══
+     Denizli'de 620 mahallenin 44'ünün adı tekrar ediyor. İlçe okunamadığında
+     motor listedeki İLKİNİ alıp yoluna devam ediyordu — yani ilçeyi alfabe
+     sırası seçiyordu.
+     Ölçülmüş gerçek belge: "3093 Apt: Güler life … Bahçelievler Mh. 20040
+     Denizli". BAHÇELİEVLER hem ÇARDAK'ta hem MERKEZEFENDİ'de var; 3093
+     sokağı ise yalnız Merkezefendi'dekinde. Motor Çardak'ı seçip sokağı
+     bulamıyor ve adres kırmızıda kalıyordu.
+     Çözüm: her adayı ayrı ayrı çöz, en iyi sonucu al. SOKAK HAKEMLİK YAPIYOR —
+     hangi ilçede gerçekten varsa doğru olan odur. Sonuç yine de bir çıkarım
+     olduğu için puanı kırpılıyor ve sürücüye söyleniyor. */
+  if (m.adaylar.length > 1 && !ilce && (yol || kapino)) {
+    let en = null;
+    for (const aday of m.adaylar) {
+      if (!aday.ilce) continue;
+      const r = coz(kaynak, { ilce: aday.ilce, mahalle, yol, kapino, bagiYokSay });
+      if (!en || r.guven > en.guven) en = r;
+    }
+    /* Yalnız GERÇEKTEN ayırt edebildiysek kullan: sokak ya da kapı bulunmuş
+       olmalı. Hepsi mahalle seviyesinde kaldıysa seçim hâlâ tahmindir. */
+    if (en && (en.keskinlik === 'kapi' || en.keskinlik === 'yol')) {
+      en.guven = Math.max(0, en.guven - 12);
+      en.renk = en.guven >= ESIK.yesil ? 'yesil' : en.guven >= ESIK.sari ? 'sari' : 'kirmizi';
+      en.notlar = [...(en.notlar || []),
+        `Mahalle adı ${m.adaylar.length} ilçede var (${m.adaylar.map((a) => a.ilce).join(', ')}); ` +
+        `sokak yalnız ${en.ilce}'de bulunduğu için oraya karar verildi`];
+      en.ilceTahmini = true;
+      return en;
+    }
   }
   if (m.adaylar.length > 1) {
     sonuc.notlar.push(`Mahalle belirsiz — ${m.adaylar.length} aday (${m.adaylar.map((a) => a.ilce).join(', ')}). İlçe gerekli.`);
@@ -3220,6 +3306,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260831004739',
+    surum: '20260831092800',
   };
 })(typeof self !== 'undefined' ? self : this);
