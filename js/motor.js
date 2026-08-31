@@ -347,9 +347,17 @@ function kapiNoAdaylari(metin) {
      yakalanacağı için burada atlanıyor. */
   const cipRe = /\b(?:sokak|sokagi|sok|sk|caddesi|cadde|cad|cd|bulvari|bulvar|blv|bul)\s*[.:]?\s*(\d{1,4}[a-zA-Z]?)(?=\s|$|,)/gi;
   while ((m = cipRe.exec(String(metin))) !== null) {
+    const kalan = String(metin).slice(m.index + m[0].length, m.index + m[0].length + 24);
     /* Sayının ardından "sokak/cadde" geliyorsa o sayı yol adının parçası. */
-    const kalan = String(metin).slice(m.index + m[0].length, m.index + m[0].length + 12);
     if (/^\s*(?:sok|sk|cad|cd|blv|bul)/i.test(kalan)) continue;
+    /* BARKOD GÜRÜLTÜSÜ — ölçülmüş sessiz yanlış.
+       Gerçek belgede satır şöyle okunuyordu:
+         "BOZKURT, İNCELER MAH. 3046 SK. 2 9819001041479147"
+       Sondaki uzun sayı club kart barkodu; ondan önceki tek haneli "2" de
+       barkodun ilk hanesinin ayrı okunmuş hâli. Motor bunu kapı numarası
+       sanıp %95 güvenle yanlış eve gönderiyordu (doğrusu 11'di).
+       Ardından 8+ haneli bir sayı geliyorsa bu numara kapı değildir. */
+    if (/^\s*\d{8,}/.test(kalan)) continue;
     ekle(m[1]);
     if (a.length >= 10) break;
   }
@@ -1618,6 +1626,27 @@ function cozBelge(db, belge = {}) {
     }
   }
 
+  /* FOTOĞRAFTAN OKUNAN ETİKETİ YAPILANDIR.
+     Teslimat etiketinde alanlar adıyla yazılı (İl/İlçe, Semt/Mahalle,
+     Alıcı Adres) ama fotoğraf yolunda hepsi tek metin yığınına giriyor ve
+     "hangi satır ne" bilgisi kayboluyor.
+     Ölçülmüş sonuç: etiket DOĞRU okunmuşken motor sayfadaki fatura adresini
+     seçti (kapı numarası taşıdığı için daha yüksek puan aldı) ve sürücüyü
+     yanlış mahalleye gönderecekti. Sözcük kutuları varken alanları adıyla
+     geri okumak bu bilgiyi kurtarıyor. */
+  if (!belge.etiket && kutulu) {
+    const A = bolge.ETIKET_ALANLARI;
+    const okunan = {
+      ilIlce: bolge.satirDegeri(kutulu, A.ilIlce),
+      semtMahalle: bolge.satirDegeri(kutulu, A.semtMahalle),
+      acikAdres: bolge.satirDegeri(kutulu, A.acikAdres),
+    };
+    if (okunan.semtMahalle || okunan.acikAdres) {
+      kaynaklar.etiket = metin.ayiklaEtiket(okunan, ilceler);
+      kaynaklar.etiket.fotograftan = true;
+    }
+  }
+
   if (belge.etiket) kaynaklar.etiket = metin.ayiklaEtiket(belge.etiket, ilceler);
   if (belge.govde) kaynaklar.govde = metin.ayiklaSerbest(belge.govde, ilceler);
   if (belge.elYazisi) kaynaklar.elYazisi = metin.ayiklaSerbest(belge.elYazisi, ilceler);
@@ -1665,6 +1694,21 @@ function cozBelge(db, belge = {}) {
     return ilceler2.some((il) => adres.mahalleBul(db, x.deger, il).adaylar.length > 0);
   });
   if (yasayanMahalle.length) adaylar.mahalle = yasayanMahalle;
+
+  /* TESLİMAT ETİKETİ MAHALLE VERİYORSA O BAĞLAYICIDIR.
+     İlçe için aşağıda uygulanan kuralın aynısı. Etiket, kargonun üstüne
+     teslimat için basılıyor; İL/İLÇE ve SEMT/MAHALLE alanları büyük
+     puntolu ve temiz (dosya başındaki kaynak değerlendirmesi). Sokak ve
+     kapı numarası bozuk olabiliyor — onlara dokunulmuyor.
+
+     Ölçülmüş sessiz yanlış: bir belgede etiket "Mehmet Akif Ersoy Mh."
+     diyordu ve DOĞRU okunmuştu; ama aynı sayfadaki FATURA adresi
+     (Zafer Mah 1016 sk 29/2) kapı numarası taşıdığı için 95 puan aldı ve
+     seçildi. Motor "kesin olan yanlışı" "belirsiz olan doğruya" tercih
+     etti. Puan artırmak yetmiyor (50'ye karşı 95); mahalleyi kısıtlamak
+     gerekiyor — çünkü mesele puan değil, hangi mahalleye gidileceği. */
+  const etiketMahalle = adaylar.mahalle.filter((a) => a.kaynak === 'etiket' && a.deger != null);
+  if (etiketMahalle.length) adaylar.mahalle = etiketMahalle;
 
   /* İLÇE BİLİNİYORSA MUTLAKA KULLANILIR — "ilçesiz" seçeneği kaldırılır.
      Nedeni ölçüldü: el yazısıyla "Atatürk Mah" yazan bir belgede ilçe serbest
@@ -2864,6 +2908,75 @@ function bolumMetni(kelimeler, desenler, ayar) {
   return satirlar.map((s) => s.join(' ')).join('\n');
 }
 
+/**
+ * BİR ETİKETİN AYNI SATIRDAKİ DEĞERİ — "Semt/Mahalle: Fatih Mh."
+ *
+ * NEDEN GEREKLİ — ölçülmüş sessiz yanlış:
+ * Teslimat etiketinde alanlar ADIYLA yazılı (İl/İlçe, Semt/Mahalle, Alıcı
+ * Adres). Fotoğraf yoluyla okunduğunda hepsi tek bir metin yığınına
+ * giriyor ve "hangi satır ne" bilgisi kayboluyor. Sonra motor, sayfadaki
+ * BAŞKA bir adresi (fatura adresi) seçebiliyor.
+ *
+ * Gerçek örnek: etikette "Semt/Mahalle: Mehmet Akif Ersoy Mh." ve
+ * "Alıcı Adres: bağdat sitesi f blok 49/1. sk., daire: 2" DOĞRU okunmuştu.
+ * Ama aynı sayfadaki fatura adresi (ZAFER MAH 1016 SK 29/2) kapı numarası
+ * taşıdığı için daha yüksek puan aldı ve %95 güvenle seçildi — sürücü
+ * yanlış mahalleye giderdi. Motor "kesin olan yanlışı" "belirsiz olan
+ * doğruya" tercih etmişti.
+ *
+ * Bu işlev alanı yeniden ADIYLA okuyor: etiketin sağında, aynı satırda
+ * kalan sözcükler. Böylece etiket yapılandırılmış bir kaynak olarak geri
+ * geliyor (bkz. metin.ayiklaEtiket).
+ *
+ * @param {Array<{metin,x0,y0,x1,y1}>} kelimeler kutulu OCR sözcükleri
+ * @param {string[]} desenler sade() edilmiş etiket kalıpları
+ * @returns {string|null}
+ */
+function satirDegeri(kelimeler, desenler) {
+  if (!Array.isArray(kelimeler) || !kelimeler.length) return null;
+  const kutulu = kelimeler.filter((k) => k && Number.isFinite(k.x0) && Number.isFinite(k.y0));
+  if (!kutulu.length) return null;
+
+  const boylar = kutulu.map((k) => k.y1 - k.y0).sort((a, b) => a - b);
+  const satirBoyu = boylar[boylar.length >> 1] || 10;
+  const enSag = Math.max(...kutulu.map((k) => k.x1));
+
+  /* Etiketi bul — bir, iki ya da üç sözcük ("alıcı adres", "semt mahalle"). */
+  let etiket = null;
+  for (let i = 0; i < kutulu.length && !etiket; i++) {
+    for (let n = 1; n <= 3 && i + n <= kutulu.length; n++) {
+      const dizi = kutulu.slice(i, i + n);
+      if (Math.abs(dizi[dizi.length - 1].y0 - dizi[0].y0) > satirBoyu * 0.7) break;
+      const d = sade(dizi.map((k) => k.metin).join(' '));
+      if (desenler.some((p) => d === p || d.startsWith(p))) {
+        etiket = { x1: dizi[dizi.length - 1].x1, y0: dizi[0].y0, y1: dizi[dizi.length - 1].y1 };
+        break;
+      }
+    }
+  }
+  if (!etiket) return null;
+
+  /* Aynı satırda, etiketin sağında kalanlar. Satır ortası ölçütü:
+     sözcüğün dikey merkezi etiketin dikey aralığında olmalı. */
+  const orta = (k) => (k.y0 + k.y1) / 2;
+  const etiketOrta = (etiket.y0 + etiket.y1) / 2;
+  const secilen = kutulu
+    .filter((k) => k.x0 >= etiket.x1 - satirBoyu * 0.3 && k.x1 <= enSag + 2 &&
+      Math.abs(orta(k) - etiketOrta) < satirBoyu * 0.6)
+    .sort((a, b) => a.x0 - b.x0);
+  if (!secilen.length) return null;
+
+  /* Sağdaki başka bir sütuna taşmasın: sözcükler arasında satır boyunun
+     6 katından büyük bir boşluk varsa orada kesiliyor. */
+  const parcalar = [secilen[0].metin];
+  for (let i = 1; i < secilen.length; i++) {
+    if (secilen[i].x0 - secilen[i - 1].x1 > satirBoyu * 6) break;
+    parcalar.push(secilen[i].metin);
+  }
+  const metin = parcalar.join(' ').replace(/^[:\s.]+/, '').trim();
+  return metin.length >= 2 ? metin : null;
+}
+
 /* Bölüm etiketleri — sade() edilmiş hâlleriyle. */
 /* "teslimat" TEK BAŞINA DESEN OLARAK KULLANILMIYOR — ölçüldü:
    belgede "Teslimat tarihi:" ve "Teslimat türü:" de geçiyor ve blok yanlış
@@ -2871,9 +2984,16 @@ function bolumMetni(kelimeler, desenler, ayar) {
 const TESLIMAT_DESENLERI = ['teslimat adresi', 'teslimat adres'];
 const FATURA_DESENLERI = ['fatura adresi', 'fatura adres'];
 
+/* Teslimat etiketinin alan adları — `satirDegeri` ile okunuyor. */
+const ETIKET_ALANLARI = {
+  ilIlce: ['il ilce', 'ililce'],
+  semtMahalle: ['semt mahalle', 'semtmahalle'],
+  acikAdres: ['alici adres', 'aliciadres'],
+};
+
 module.exports = {
-  adresBolgeleri, egiklikAcisi, bolumMetni,
-  ETIKETLER, TESLIMAT_DESENLERI, FATURA_DESENLERI,
+  adresBolgeleri, egiklikAcisi, bolumMetni, satirDegeri,
+  ETIKETLER, TESLIMAT_DESENLERI, FATURA_DESENLERI, ETIKET_ALANLARI,
 };
 
   };
@@ -2886,6 +3006,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260830234839',
+    surum: '20260831000334',
   };
 })(typeof self !== 'undefined' ? self : this);
