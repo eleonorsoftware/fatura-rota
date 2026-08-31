@@ -128,7 +128,17 @@ const GURULTU = ['pk', 'posta', 'kodu', 'tel', 'telefon', 'gsm', 'cep', 'tr', 't
                     ünvanı duruyor ("… San tic ltd şti Zümrüt Mh.") ve mahalle
                     adı geriye doğru yürürken bunları da yutuyordu. */
                  'ltd', 'sti', 'sirketi', 'sirket', 'limited', 'anonim',
-                 'tic', 'ticaret', 'san', 'sanayi', 'as', 'kolektif',
+                 /* "san" KISALTMASI gürültü, "sanayi" DEĞİL.
+                    Ölçüldü: Denizli adres verisinde adında SANAYİ geçen
+                    85 ayrı sokak var — "SANAYİ SİTESİ", "1.SANAYİ" …
+                    "8.SANAYİ" (Kale/Uluçam), "ORGANİZE SANAYİ" (Honaz),
+                    "KÜÇÜK SANAYİ SİTESİ" (Bekilli, Tavas). "sanayi"
+                    gürültü sayıldığı sürece bu adreslerin HİÇBİRİ
+                    çözülemiyordu; sürücünün "sanayi sitesi diye adres var,
+                    numaraları bile var" dediği durum tam olarak buydu.
+                    Firma ünvanları zaten "tic/ticaret/ltd/sti/san" ile
+                    yakalanıyor; "sanayi"yi de eklemeye gerek yok. */
+                 'tic', 'ticaret', 'san', 'as', 'kolektif',
                  /* FORM ETİKETLERİ. Tam sayfa okutulduğunda alan adları da
                     metne giriyor: "Semt/Mahalle: Karaman Mh." satırında
                     ayıklayıcı, etiketteki "Mahalle" sözcüğünü adres eki sanıp
@@ -424,7 +434,7 @@ function adaylarUret(kelimeler, ekIndeks, enFazla, solSinir) {
  * kendi adresi ("TERAS PARK AVM 55. SOKAK"). İlk bulduğunda dursaydık
  * müşterinin sokağını hiç görmezdik.
  */
-function yolAdaylari(sadeAyrik, ham) {
+function yolAdaylari(sadeAyrik, ham, capa) {
   const kelimeler = sadeAyrik.split(' ');
   const solSinir = new Set([...EK.mahalle, ...EK.bina, ...EK.numara, ...GURULTU]);
   const hepsi = [];
@@ -437,7 +447,7 @@ function yolAdaylari(sadeAyrik, ham) {
     }
     if (hepsi.length >= 12) break;          // kombinasyon patlamasın
   }
-  return egikSayiliDuzelt(hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik), ham);
+  return egikSayiliDuzelt(hepsi.length ? hepsi : yolAdaylariEksiz(sadeAyrik, capa), ham);
 }
 
 /**
@@ -487,11 +497,29 @@ function egikSayiliDuzelt(adaylar, ham) {
  * Gerçek örnek: "TAŞ MAH 2031/9 NO16" — "2031/9" sokaktır ama "sk" yazmıyor.
  * Mahalle ekinden sonra başlayıp ilk numara/daire işaretine kadar okunur.
  */
-function yolAdaylariEksiz(sadeAyrik) {
+/**
+ * @param {string} sadeAyrik
+ * @param {string[]} [capaSozcukleri] mahalle EKİ yoksa, adres bu sözcüklerden
+ *        sonra başlıyor kabul edilir (gazetteer'dan bulunan mahalle adı).
+ */
+function yolAdaylariEksiz(sadeAyrik, capaSozcukleri) {
   const kelimeler = sadeAyrik.split(' ');
   let bas = -1;
   for (let i = 0; i < kelimeler.length; i++) {
     if (ekMi(kelimeler[i], EK.mahalle)) { bas = i + 1; break; }
+  }
+  /* MAHALLE EKİ YOKSA MAHALLE ADINDAN SONRA BAŞLA.
+     Sanayi ve köy adreslerinde ek yazılmıyor ("KALE ULUÇAM 3. SANAYİ NO:5").
+     Mahalle gazetteer taramasıyla bulunduğunda (bkz. adres.metindeMahalleAra)
+     adı buraya çapa olarak veriliyor; sokak ondan sonra başlıyor. */
+  if (bas < 0 && Array.isArray(capaSozcukleri) && capaSozcukleri.length) {
+    for (let i = 0; i + capaSozcukleri.length <= kelimeler.length; i++) {
+      let tuttu = true;
+      for (let j = 0; j < capaSozcukleri.length; j++) {
+        if (kelimeler[i + j] !== capaSozcukleri[j]) { tuttu = false; break; }
+      }
+      if (tuttu) { bas = i + capaSozcukleri.length; break; }
+    }
   }
   if (bas < 0) return [];
 
@@ -499,7 +527,11 @@ function yolAdaylariEksiz(sadeAyrik) {
   const alinan = [];
   for (let i = bas; i < kelimeler.length; i++) {
     const k = kelimeler[i];
-    if (dur.has(k)) break;
+    /* "SİTESİ" HEM BİNA EKİ HEM SOKAK ADI PARÇASI.
+       "Bağdat Sitesi F Blok" → bina; "SANAYİ SİTESİ" → gerçek bir sokak
+       adı (Acıpayam, Bekilli, Tavas'ta kayıtlı). Ayırt edici: bir önceki
+       sözcük. "sanayi sitesi" bir bütün, orada durulmuyor. */
+    if (dur.has(k) && !(k === 'sitesi' && alinan[alinan.length - 1] === 'sanayi')) break;
     if (/^no\d+/.test(k)) break;              // "no16" yapışık yazılmış
     if (/^\d{5}$/.test(k)) break;             // posta kodu
     if (ekMi(k, EK.yol)) continue;
@@ -542,11 +574,12 @@ const mahalleBul = (s) => mahalleAdaylari(s)[0] || null;
  *   ayiklaSerbest("Zümrüt Mh. Vatan Blv. No:174A PK: 20160 Pamukkale Denizli", ilceler)
  *   -> { ilce:'PAMUKKALE', mahalle:'zumrut', yol:'vatan', kapino:'174A', … }
  */
-function ayiklaSerbest(metin, ilceAdlari) {
+function ayiklaSerbest(metin, ilceAdlari, capaMahalle) {
   if (!metin) return {};
   const ayrik = ayirEkler(sade(metin));
   const mAday = mahalleAdaylari(ayrik);
-  const yAday = yolAdaylari(ayrik, metin);
+  const capa = capaMahalle ? sade(capaMahalle).split(' ').filter(Boolean) : null;
+  const yAday = yolAdaylari(ayrik, metin, capa);
   return {
     ilce: ilceBul(metin, ilceAdlari),
     mahalle: mAday[0] || null, mahalleAdaylar: mAday,
@@ -912,6 +945,20 @@ function yolBul(kaynak, mahalleOid, yolAdi) {
   let y = adlar.filter((r) => r.adAra === ys);
   if (y.length) return { yollar: geometriEkle(y), eslesme: 'tam' };
 
+  /* BOŞLUK FARKI TAM EŞLEŞME SAYILIR.
+     Belediye verisi ile faturanın kelimeleri ayırma biçimi tutmuyor:
+       veri "PAZARYERİ"        fatura "pazar yeri cad"
+       veri "SANAYİSİTESİ"     fatura "sanayi sitesi"
+       veri "YUNUSEMRE"        fatura "yunus emre"
+     Bunlar farklı sokak değil, aynı sokağın iki yazımı. Boşluklar
+     atıldığında birebir tuttuğu için tam eşleşme kabul ediliyor —
+     harf farkı yok, yalnız ayırma farkı var. */
+  const boslukSuz = ys.replace(/ /g, '');
+  if (boslukSuz.length >= 4) {
+    y = adlar.filter((r) => r.adAra.replace(/ /g, '') === boslukSuz);
+    if (y.length) return { yollar: geometriEkle(y), eslesme: 'tam' };
+  }
+
   y = adlar.filter((r) => r.adAra.startsWith(ys));
   if (y.length) return { yollar: geometriEkle(y), eslesme: 'onek' };
 
@@ -1005,6 +1052,62 @@ function kapiBul(kaynak, mahalleOid, kapino) {
     if (k.length) return { kapilar: k, eslesme: 'taban' };
   }
   return { kapilar: [], eslesme: null };
+}
+
+/**
+ * METİNDE MAHALLE ADI ARA — "Mh." yazmadığında.
+ *
+ * NEDEN GEREKLİ — sanayi ve köy adreslerinde mahalle eki çoğu zaman
+ * yazılmıyor:
+ *   "KALE ULUÇAM 3. SANAYİ NO:5"
+ *   "HONAZ KAKLIK ORGANİZE SANAYİ NO:3"
+ *   "özdemirci asvalt üzeri sanayi sitesi pazar yeri cad 10"
+ * Ayıklayıcı mahalleyi EKİNDEN bulduğu için bu adreslerde hiç mahalle
+ * göremiyor ve sokak seviyesine bile inemiyordu.
+ *
+ * Bu arama TAHMİN ÜRETMİYOR: metindeki 1-3 sözcüklük her pencereyi, o
+ * ilçede GERÇEKTEN VAR OLAN mahalle adlarıyla karşılaştırıyor. Eşleşme
+ * yoksa hiçbir şey döndürmüyor.
+ *
+ * En UZUN eşleşme kazanıyor: "1200 EVLER" varken "EVLER" seçilmemeli.
+ *
+ * @param {object} kaynak
+ * @param {string} metinHam  belgedeki ham metin
+ * @param {string|null} ilce ilçe adı — biliniyorsa arama oraya sınırlanır
+ * @returns {string|null} bulunan mahalle adı
+ */
+function metindeMahalleAra(kaynak, metinHam, ilce) {
+  if (!metinHam) return null;
+  const kelimeler = sade(metinHam).split(' ').filter(Boolean);
+  if (!kelimeler.length) return null;
+
+  const ilceAra = ilce ? sade(ilce) : null;
+  /* Aday mahalleler — ilçe biliniyorsa yalnız oradakiler. */
+  const mahalleler = kaynak.mahalleler().filter((m) =>
+    !ilceAra || sade(m.ilce || '') === ilceAra);
+  if (!mahalleler.length) return null;
+
+  const indeks = new Map();
+  for (const m of mahalleler) {
+    const a = sade(m.adAra || m.ad);
+    if (a && !indeks.has(a)) indeks.set(a, m.ad);
+    /* Boşluksuz hâli de aransın: veri "1200EVLER", fatura "1200 evler". */
+    const b = a.replace(/ /g, '');
+    if (b && b !== a && !indeks.has(b)) indeks.set(b, m.ad);
+  }
+
+  let enIyi = null, enIyiUzunluk = 0;
+  for (let i = 0; i < kelimeler.length; i++) {
+    for (let n = 3; n >= 1; n--) {
+      if (i + n > kelimeler.length) continue;
+      const parca = kelimeler.slice(i, i + n).join(' ');
+      /* Tek harfli/çok kısa parçalar rastgele eşleşir; en az 3 karakter. */
+      if (parca.replace(/ /g, '').length < 3) continue;
+      const bulunan = indeks.get(parca) || indeks.get(parca.replace(/ /g, ''));
+      if (bulunan && parca.length > enIyiUzunluk) { enIyi = bulunan; enIyiUzunluk = parca.length; }
+    }
+  }
+  return enIyi;
 }
 
 /* ------------------------------------------------------------------- çözüm */
@@ -1342,7 +1445,7 @@ function son(s) {
 
 module.exports = {
   ac, coz, ilceAdlari,
-  mahalleBul, yolBul, kapiBul,
+  mahalleBul, yolBul, kapiBul, metindeMahalleAra,
   cizgiyeMesafe, noktaParcaMesafe, benzerlik,
   ESIK,
 };
@@ -1600,6 +1703,7 @@ const bolge = require('./bolge');
  */
 function cozBelge(db, belge = {}) {
   const ilceler = adres.ilceAdlari(db);
+  let sonucNotu = null;
 
   /* Her kaynağı kendi biçimine uygun ayrıştır.
      EKLEME SIRASI ÖNEMLİ: aynı değer birden çok kaynakta geçerse ilk ekleyen
@@ -1695,6 +1799,84 @@ function cozBelge(db, belge = {}) {
   });
   if (yasayanMahalle.length) adaylar.mahalle = yasayanMahalle;
 
+  /* ══ "Mh." YAZMAYAN MAHALLE ══
+     Ayıklayıcı mahalleyi ekinden buluyor ("Karaman MH."). Ama sanayi/köy
+     adreslerinde ek çoğu zaman yazılmıyor:
+        "KALE ULUÇAM 3. SANAYİ NO:5"
+        "HONAZ KAKLIK ORGANİZE SANAYİ NO:3"
+        "özdemirci asvalt üzeri sanayi sitesi pazar yeri cad 10"
+     Bu adreslerde mahalle adı METİNDE VAR ama işaretsiz; motor hiç mahalle
+     bulamayıp sokak seviyesine bile inemiyordu.
+
+     Çare: ek bulunamadıysa metni GAZETTEER'a karşı tara. Uydurma değil —
+     yalnız o ilçede GERÇEKTEN VAR OLAN mahalle adları aranıyor, en uzun
+     eşleşme kazanıyor ("1200 EVLER" > "EVLER"). İlçe biliniyorsa arama o
+     ilçeyle sınırlı; bilinmiyorsa tüm il taranıyor ama sonuç zaten
+     ilçesizlik yüzünden düşük güvenli kalıyor. */
+  if (!adaylar.mahalle.some((x) => x.deger != null)) {
+    const ham = [belge.serbest, belge.govde, belge.elYazisi,
+      belge.etiket && belge.etiket.semtMahalle, teslimatBlogu].filter(Boolean).join(' ');
+    const bulunan = adres.metindeMahalleAra(db, ham, ilceler2[0] || null);
+    if (bulunan) {
+      adaylar.mahalle.unshift({ deger: bulunan, kaynak: 'gazetteer' });
+      sonucNotu = `Mahalle adı "Mh." yazmadan geçiyor — "${bulunan}" olarak okundu`;
+
+      /* SOKAĞI DA YENİDEN ARA — mahalle ADI artık çapa.
+         Sokak arayıcı normalde mahalle EKİNDEN sonrasına bakıyor; ek yoksa
+         hiç aday üretemiyordu. Mahalle adı bulunduğuna göre sokak ondan
+         sonra başlıyor: "KALE ULUÇAM | 3. SANAYİ NO:5". */
+      if (!adaylar.yol.some((x) => x.deger != null)) {
+        const yeniden = metin.ayiklaSerbest(ham, ilceler, bulunan);
+        for (const d of (yeniden.yolAdaylar || [])) {
+          if (d && !adaylar.yol.some((x) => x.deger != null && metin.sade(x.deger) === metin.sade(d))) {
+            adaylar.yol.unshift({ deger: d, kaynak: 'gazetteer' });
+          }
+        }
+      }
+    }
+  }
+
+  /* ══ BELGE NE YAZDIYSA O — KISA ÖN EKE KAÇMA ══
+     Aday listesinde hem "3" hem "3 sanayi" varsa ve İKİSİ DE gazetteer'da
+     gerçek sokaksa, belge "3. SANAYİ" yazdığı için uzun olan doğrudur.
+     Kısa olanı bırakmak gerekiyor, yoksa şu oluyor (ölçüldü):
+
+       belge : "KALE ULUÇAM 3. SANAYİ NO:5"
+       veri  : 3.SANAYİ'de 5 numaralı kapı YOK, "3 NOLU"da VAR
+       motor : "3 NOLU / no 5" · 91 puan YEŞİL   ← sessizce yanlış sokak
+
+     Doğrusu: sokak 3.SANAYİ, kapı bulunamadı → sokak seviyesi, sarı.
+     Motor burada "kesin olan yanlışı" "belirsiz olan doğruya" tercih
+     ediyordu; aynı kalıp etiket/fatura ayrımında da görülmüştü. */
+  {
+    const yasayanMah = adaylar.mahalle.filter((x) => x.deger != null);
+    const varMi = (ad) => yasayanMah.some((mm) => {
+      for (const il of (ilceler2.length ? ilceler2 : [null])) {
+        const m2 = adres.mahalleBul(db, mm.deger, il);
+        if (!m2.adaylar.length) continue;
+        const y2 = adres.yolBul(db, m2.adaylar[0].objectid, ad);
+        if (y2.yollar.length && y2.eslesme === 'tam') return true;
+      }
+      return false;
+    });
+    const dolu = adaylar.yol.filter((x) => x.deger != null);
+    if (dolu.length > 1) {
+      const atilacak = new Set();
+      for (const kisa of dolu) {
+        const ks = metin.sade(kisa.deger);
+        for (const uzun of dolu) {
+          const us = metin.sade(uzun.deger);
+          if (us === ks || !us.startsWith(ks + ' ')) continue;
+          /* Uzun ad gerçekten varsa kısa olanı at. */
+          if (varMi(uzun.deger)) { atilacak.add(ks); break; }
+        }
+      }
+      if (atilacak.size) {
+        adaylar.yol = adaylar.yol.filter((x) => x.deger == null || !atilacak.has(metin.sade(x.deger)));
+      }
+    }
+  }
+
   /* TESLİMAT ETİKETİ MAHALLE VERİYORSA O BAĞLAYICIDIR.
      İlçe için aşağıda uygulanan kuralın aynısı. Etiket, kargonun üstüne
      teslimat için basılıyor; İL/İLÇE ve SEMT/MAHALLE alanları büyük
@@ -1788,6 +1970,9 @@ function cozBelge(db, belge = {}) {
   sonuc.kaynak = enIyi.kaynak;
   sonuc.denenen = denenen.length;
   sonuc.uyarilar = [...(sonuc.notlar || [])];
+  /* Mahalle adı ekinden değil gazetteer taramasından geldiyse sürücü bilsin —
+     doğru olma ihtimali yüksek ama belgede işaretsiz duruyor. */
+  if (sonucNotu && enIyi.kaynak.mahalle === 'gazetteer') sonuc.uyarilar.push(sonucNotu);
 
   /* --- Sürücüye gösterilecek uyarılar --- */
 
@@ -3006,6 +3191,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260831000334',
+    surum: '20260831002802',
   };
 })(typeof self !== 'undefined' ? self : this);

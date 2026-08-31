@@ -10,7 +10,7 @@
 <title>Fatura Rota</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="ikon/ikon-180.png">
-<link rel="stylesheet" href="css/stil.css?s=20260831000334">
+<link rel="stylesheet" href="css/stil.css?s=20260831002802">
 </head>
 <body>
 
@@ -65,19 +65,19 @@
 <main class="sayfa" id="sayfa-arsiv">
   <div id="arsivListe"></div>
   <div id="hafizaOzet" style="margin-top:18px"></div>
-  <!-- Kargolar Teras Park'tan alınıp dağıtıma çıkılıyor; günün rotası
-       oradan başlıyor. Depo taşınırsa ya da bu nokta tam tutmuyorsa
-       sürücü orada dururken tek dokunuşla düzeltebilsin. -->
+  <!-- Rota HER ZAMAN cihazın o anki konumundan hesaplanıyor. Buradaki
+       nokta yalnız KONUM ALINAMAZSA, sorulup onaylanarak kullanılıyor. -->
   <div class="kart" style="margin-top:12px;display:block">
-    <div class="ad" style="margin-bottom:6px">🏁 Çıkış noktası</div>
+    <div class="ad" style="margin-bottom:6px">🏁 Yedek çıkış noktası</div>
     <div class="adres" id="depoDurum">—</div>
     <div class="dugme-sirasi" style="margin-top:8px">
-      <button class="dugme kucuk birincil" id="btnDepoKonum">📍 Buradayım, çıkış noktası yap</button>
+      <button class="dugme kucuk birincil" id="btnDepoKonum">📍 Buradayım, burayı yedek yap</button>
       <button class="dugme kucuk" id="btnDepoVarsayilan">Teraspark'a döndür</button>
     </div>
     <div class="adres" style="margin-top:8px;font-size:13px">
-      Günün rotası buradan başlar. Teslimata başladıktan sonra rotayı
-      yenilersen, kalan duraklar bulunduğun yere göre sıralanır.
+      Rota <b>her zaman bulunduğun konumdan</b> hesaplanır — ilk durak da,
+      aradaki duraklar da. Burası yalnız GPS hiç alınamazsa, sana sorulduktan
+      sonra kullanılır.
     </div>
   </div>
 
@@ -187,9 +187,9 @@
 </div>
 
 <script src="ocr/tesseract.min.js?s=20260830185945"></script>
-<script src="js/ocr.js?s=20260831000334"></script>
-<script src="js/motor.js?s=20260831000334"></script>
-<script src="js/depo.js?s=20260831000334"></script>
-<script src="js/app.js?s=20260831000334"></script>
+<script src="js/ocr.js?s=20260831002802"></script>
+<script src="js/motor.js?s=20260831002802"></script>
+<script src="js/depo.js?s=20260831002802"></script>
+<script src="js/app.js?s=20260831002802"></script>
 </body>
 </html>

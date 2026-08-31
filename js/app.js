@@ -323,42 +323,49 @@
     const supheli = koordinatli.filter((d) => d.renk !== 'yesil').length;
     if (supheli && !sessiz && !confirm(`${supheli} adres kontrol bekliyor.\nYine de rotayı çıkarayım mı?`)) return;
 
-    /* ═══ BAŞLANGIÇ NOKTASI ═══
-       Kargolar Teras Park'tan alınıp dağıtıma çıkılıyor; günün rotası da
-       oradan başlar. Bu yüzden İLK rota için anlık konum SORULMUYOR —
-       sürücü faturaları evde de okutsa, depoda da okutsa rota depodan çıkar.
-       Bunun yan faydası: konum izni/GPS olmadan da rota çıkıyor.
+    /* ═══ BAŞLANGIÇ = CİHAZIN O ANKİ KONUMU ═══
+       ⚠️ BİR SÜRE SABİT DEPO (Teras Park) BAŞLANGIÇ OLARAK KULLANILDI, GERİ
+       ALINDI. Gerekçesi kullanıcıdan geldi ve doğru: sürücü ilk durağa
+       vardıktan sonra ikinci durağı isterse, sabit başlangıçlı bir rota onu
+       hâlâ depodaymış gibi hesaplar. Sabah bir kez doğru olan şey, günün
+       geri kalanında yanlış. Kargonun depodan alınması, rotanın oradan
+       hesaplanmasını gerektirmiyor — sürücü zaten oradaysa konum da orayı
+       gösterir.
 
-       Gün içinde teslimat başladıysa depo artık doğru başlangıç değil;
-       sürücü yolda. O zaman anlık konum kullanılıyor, alınamazsa SON TESLİM
-       EDİLEN durak (oraya yakın olduğu kesin) — depoya dönmek yerine. */
-    const o = D.ozet(durum.gun);
-    const yolaCikildi = (o.teslim + o.basarisiz) > 0;
-    let baslangic = null, baslangicKaynak = 'depo';
-
-    if (!yolaCikildi) {
-      baslangic = await depoAl();
-      baslangicKaynak = 'depo';
-    } else {
-      try {
-        if (!sessiz) bilgiGoster('Konumun alınıyor…', true);
-        baslangic = await konumAl({ sure: sessiz ? 6000 : 10000, enFazlaYas: sessiz ? 120000 : 15000 });
-        baslangicKaynak = 'konum';
-      } catch (e) {
-        bilgiGizle();
-        /* Teslimat yapılmış duraklardan SONUNCUSU, sürücünün bulunduğu yere
-           en yakın bildiğimiz nokta. Depodan başlatmaktan çok daha doğru. */
-        const gidilen = D.siraliDuraklar(durum.gun)
-          .filter((d) => d.durum !== 'bekliyor' && d.lat != null);
-        if (gidilen.length) {
-          const son = gidilen[gidilen.length - 1];
-          baslangic = { lat: son.lat, lng: son.lng };
-          baslangicKaynak = 'son-teslimat';
-          if (!sessiz) uyar('Konum alınamadı — rota son teslim ettiğin adresten sıralandı.');
-        } else {
-          baslangic = await depoAl();
-          baslangicKaynak = 'depo';
-        }
+       Depo yalnız KONUM ALINAMAZSA, sürücünün açık onayıyla kullanılıyor. */
+    let baslangic = null, baslangicKaynak = 'konum';
+    try {
+      if (!sessiz) bilgiGoster('Konumun alınıyor…', true);
+      baslangic = await konumAl({ sure: sessiz ? 6000 : 12000, enFazlaYas: sessiz ? 60000 : 10000 });
+    } catch (e) {
+      bilgiGizle();
+      /* Teslimat yapılmış duraklardan SONUNCUSU, sürücünün bulunduğu yere
+         en yakın bildiğimiz nokta — depodan çok daha doğru bir tahmin. */
+      const gidilen = D.siraliDuraklar(durum.gun)
+        .filter((d) => d.durum !== 'bekliyor' && d.lat != null);
+      if (gidilen.length) {
+        const son = gidilen[gidilen.length - 1];
+        baslangic = { lat: son.lat, lng: son.lng };
+        baslangicKaynak = 'son-teslimat';
+        if (!sessiz) uyar('Konum alınamadı — rota son teslim ettiğin adresten sıralandı.');
+      } else if (sessiz) {
+        /* Sessiz tazelemede soru sorulmuyor; eski başlangıç korunuyor ki
+           yeni duraklar yine de rotaya girsin. */
+        const r = durum.gun.rota;
+        if (r && r.baslangicLat != null) {
+          baslangic = { lat: r.baslangicLat, lng: r.baslangicLng };
+          baslangicKaynak = r.baslangicKaynak || 'onceki';
+        } else return;
+      } else {
+        const depo = await depoAl();
+        const devam = confirm(
+          e.message + '\n\n' +
+          'Rota nereden başlasın?\n\n' +
+          'TAMAM  → ' + (depo.ad || 'çıkış noktası') + '\n' +
+          'İPTAL  → rotayı çıkarma, konum iznini açıp tekrar dene');
+        if (!devam) { uyar('Rota çıkarılmadı — konum izni verip tekrar dene.'); return; }
+        baslangic = depo;
+        baslangicKaynak = 'depo';
       }
     }
 
@@ -414,6 +421,46 @@
 
   function konumIste() {
     konumAl({ enFazlaYas: 30000 }).then(varisKontrol).catch(() => {});
+  }
+
+  /**
+   * KONUMU CANLI TUT — `watchPosition`.
+   *
+   * Rota artık cihazın O ANKİ konumundan hesaplanıyor. Tek seferlik
+   * `getCurrentPosition` çağrıları arasında GPS kapanıyor ve her istekte
+   * yeniden kilitlenmesi 5-15 saniye sürebiliyor; sürücü "rotayı yenile"ye
+   * bastığında beklemek zorunda kalıyor. İzleme açıkken konum sürekli
+   * güncel duruyor, hem rota anında çıkıyor hem varış algılama isabetli.
+   *
+   * PİL: yalnız GEREKTİĞİNDE açık — gün açık, bekleyen durak var ve
+   * uygulama ön planda. Sekme arkaya alınınca kapanıyor.
+   *
+   * ⚠️ TARAYICI SINIRI: iPhone'da (PWA) uygulama arka plana atılınca
+   * tarayıcı konumu keser — bu bir ayar meselesi değil, iOS'un kuralı.
+   * Android APK'da bunun için ayrı bir ön plan servisi var
+   * (ArkaPlanTakip); telefon cepteyken de çalışan tek yol o.
+   */
+  let _izlemeKimlik = null;
+
+  function konumIzlemeAyarla() {
+    const gerekli = !!(durum.gun && durum.gun.durum === 'acik' &&
+      D.ozet(durum.gun).bekleyen > 0 && !document.hidden);
+    if (gerekli && _izlemeKimlik === null && navigator.geolocation) {
+      _izlemeKimlik = navigator.geolocation.watchPosition(
+        (p) => {
+          durum.konum = {
+            lat: p.coords.latitude, lng: p.coords.longitude,
+            dogruluk: p.coords.accuracy, zaman: Date.now(),
+          };
+          varisKontrol();
+        },
+        () => { /* izleme hatası sessiz — tek seferlik istek yine deneyecek */ },
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 }
+      );
+    } else if (!gerekli && _izlemeKimlik !== null) {
+      navigator.geolocation.clearWatch(_izlemeKimlik);
+      _izlemeKimlik = null;
+    }
   }
 
   /**
@@ -549,6 +596,10 @@
     cizUyari(o);
     cizListe();
     cizYuzen(o);
+    /* Konum izleme ve arka plan takibi, günün durumuna göre açılıp
+       kapanıyor — her çizimde yeniden değerlendiriliyor. */
+    konumIzlemeAyarla();
+    takibiAyarla();
   }
 
   function cizAktif() {
@@ -675,14 +726,18 @@
            sorulacak soru bu. */
         const baslangicYazi =
           r.baslangicKaynak === 'depo'
-            ? `<b>${kacis(r.baslangicAd || 'çıkış noktası')}</b> (kargoları aldığın yer)`
+            ? `<b>${kacis(r.baslangicAd || 'yedek çıkış noktası')}</b> (konum alınamadı)`
           : r.baslangicKaynak === 'son-teslimat'
             ? '<b>son teslim ettiğin adres</b> (konum alınamadı)'
             : `<b>bulunduğun konum</b>${r.baslangicDogruluk ? ` (±${Math.round(r.baslangicDogruluk)} m)` : ''}`;
-        /* Yol alındıysa depodan çıkarılmış rota bayatlar. */
-        const yolNotu = (r.baslangicKaynak === 'depo' && (o.teslim + o.basarisiz) > 0)
-          ? '<br><b>Teslimata başladın</b> — rotayı yenilersen kalan duraklar bulunduğun yere göre sıralanır.'
-          : (yas != null && yas > 45 ? '<b>Çok yol aldıysan yenile.</b>' : '');
+        /* ROTA BAYATLADI MI? Rota, çıkarıldığı ANDAKİ konumdan hesaplanıyor.
+           Sürücü yol aldıysa o başlangıç artık geçerli değil; kalan duraklar
+           bulunduğu yere göre yeniden sıralanmalı. Teslimat yapılmışsa ya da
+           rota eskiyse söyleniyor. */
+        const yolAlindi = (o.teslim + o.basarisiz) > 0;
+        const yolNotu = (yolAlindi || (yas != null && yas > 45))
+          ? `<br><b>${yolAlindi ? 'Teslimata başladın' : yas + ' dakika oldu'}</b> — rotayı yenilersen kalan duraklar <b>şu anki konumuna</b> göre sıralanır.`
+          : '';
 
         parca.push(`<div class="uyari bilgi">🧭 <div>
           Başlangıç: ${baslangicYazi}
@@ -1074,6 +1129,7 @@
 
     /* Uygulamaya dönüldüğünde varış kontrolü — Google Maps'ten dönüş anı. */
     document.addEventListener('visibilitychange', () => {
+      konumIzlemeAyarla();          // arkaya alınınca kapansın, dönünce açılsın
       if (!document.hidden) konumIste();
     });
   }
