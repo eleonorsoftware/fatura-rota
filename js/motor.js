@@ -1107,7 +1107,16 @@ function metindeMahalleAra(kaynak, metinHam, ilce) {
       if (bulunan && parca.length > enIyiUzunluk) { enIyi = bulunan; enIyiUzunluk = parca.length; }
     }
   }
-  return enIyi;
+  if (!enIyi) return null;
+  /* İLÇESİYLE BİRLİKTE DÖN. Mahalleyi bulduysak ilçesini de biliyoruz ve
+     bu bilgi çağıran için kritik: ilçe bilinince, mahalle tutmadığında
+     sokağı İLÇE GENELİNDE arama yolu açılıyor (bkz. ilceGenelinde).
+     Ölçülmüş durum: "özdemirci … pazar yeri cad 10" belgesinde ÖZDEMİRCİ
+     gerçek bir Çivril mahallesi ama aranan sokak (PAZARYERİ) komşu KIRALAN
+     mahallesinde. Yalnız mahalle döndürülseydi, doğru sokağa ulaşan tek
+     yol kapanırdı. */
+  const mm = mahalleler.find((m) => m.ad === enIyi);
+  return { ad: enIyi, ilce: (mm && mm.ilce) || null };
 }
 
 /* ------------------------------------------------------------------- çözüm */
@@ -1813,24 +1822,44 @@ function cozBelge(db, belge = {}) {
      eşleşme kazanıyor ("1200 EVLER" > "EVLER"). İlçe biliniyorsa arama o
      ilçeyle sınırlı; bilinmiyorsa tüm il taranıyor ama sonuç zaten
      ilçesizlik yüzünden düşük güvenli kalıyor. */
-  if (!adaylar.mahalle.some((x) => x.deger != null)) {
+  /* ⚠️ KOŞUL "HİÇ ADAY YOK" DEĞİL, "GAZETTEER'DA YAŞAYAN ADAY YOK".
+     Ölçülmüş kaçırma: belgenin başlığında Media Markt'ın İstanbul merkezi
+     yazıyor ("YEŞİLCE MAH. ESKİ BÜYÜKDERE CAD."). Bu, "mah" eki taşıdığı
+     için bir mahalle adayı üretiyor — Denizli'de böyle bir mahalle olmadığı
+     hâlde aday listesi DOLU görünüyordu ve tarama hiç çalışmıyordu.
+     Sonuç: "özdemirci … sanayi sitesi pazar yeri cad 10" belgesi, ÖZDEMİRCİ
+     Çivril'de gerçek bir mahalle olmasına rağmen çözülemiyordu. */
+  if (!yasayanMahalle.length) {
     const ham = [belge.serbest, belge.govde, belge.elYazisi,
       belge.etiket && belge.etiket.semtMahalle, teslimatBlogu].filter(Boolean).join(' ');
-    const bulunan = adres.metindeMahalleAra(db, ham, ilceler2[0] || null);
-    if (bulunan) {
+    const gaz = adres.metindeMahalleAra(db, ham, ilceler2[0] || null);
+    if (gaz) {
+      const bulunan = gaz.ad;
       adaylar.mahalle.unshift({ deger: bulunan, kaynak: 'gazetteer' });
       sonucNotu = `Mahalle adı "Mh." yazmadan geçiyor — "${bulunan}" olarak okundu`;
+
+      /* İLÇE DE ÖĞRENİLDİ. Belgede ilçe yazmıyor olabilir (OCR kaçırmış ya da
+         hiç basılmamış); mahalleden geliyor. Bu, mahalle tutmazsa sokağı
+         ilçe genelinde arama yolunu açıyor — o yol olmadan "pazar yeri cad"
+         gibi komşu mahalledeki sokaklar bulunamıyor. */
+      if (gaz.ilce && !adaylar.ilce.some((x) => x.deger != null)) {
+        adaylar.ilce.unshift({ deger: gaz.ilce, kaynak: 'gazetteer' });
+        ilceler2.push(gaz.ilce);
+      }
 
       /* SOKAĞI DA YENİDEN ARA — mahalle ADI artık çapa.
          Sokak arayıcı normalde mahalle EKİNDEN sonrasına bakıyor; ek yoksa
          hiç aday üretemiyordu. Mahalle adı bulunduğuna göre sokak ondan
          sonra başlıyor: "KALE ULUÇAM | 3. SANAYİ NO:5". */
-      if (!adaylar.yol.some((x) => x.deger != null)) {
-        const yeniden = metin.ayiklaSerbest(ham, ilceler, bulunan);
-        for (const d of (yeniden.yolAdaylar || [])) {
-          if (d && !adaylar.yol.some((x) => x.deger != null && metin.sade(x.deger) === metin.sade(d))) {
-            adaylar.yol.unshift({ deger: d, kaynak: 'gazetteer' });
-          }
+      /* KOŞULSUZ EKLENİYOR, "hiç aday yoksa" diye beklenmiyor.
+         Ölçülmüş kaçırma: sayfanın başlığındaki mağaza adresi ("ESKİ
+         BÜYÜKDERE CAD.") bir sokak adayı üretiyor ve liste dolu görünüyor;
+         oysa o sokak müşterinin mahallesinde yok. Adaylar zaten liyakatle
+         yarışıyor — var olmayan eleniyor, gerçek olan kazanıyor. */
+      const yeniden = metin.ayiklaSerbest(ham, ilceler, bulunan);
+      for (const d of (yeniden.yolAdaylar || [])) {
+        if (d && !adaylar.yol.some((x) => x.deger != null && metin.sade(x.deger) === metin.sade(d))) {
+          adaylar.yol.unshift({ deger: d, kaynak: 'gazetteer' });
         }
       }
     }
@@ -3191,6 +3220,6 @@ module.exports = {
     rota: require('./rota'),
     ors: require('./ors'),
     bolge: require('./bolge'),
-    surum: '20260831002802',
+    surum: '20260831004739',
   };
 })(typeof self !== 'undefined' ? self : this);
